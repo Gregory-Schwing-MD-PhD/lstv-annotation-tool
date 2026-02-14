@@ -12,9 +12,14 @@ class LSTVAnnotationApp {
         console.log('Initializing LSTV Annotation Tool...');
         
         try {
-            // Initialize authentication
+            // Show loading state
+            this.showLoadingState('Authenticating...');
+            
+            // Initialize authentication (will redirect if not logged in)
             await authManager.init();
             console.log('✓ Authentication initialized');
+            
+            this.showLoadingState('Initializing DICOM viewer...');
             
             // Initialize DICOM viewer
             dicomViewer = new DicomViewer('dicomViewer');
@@ -23,6 +28,8 @@ class LSTVAnnotationApp {
             // Setup UI event listeners
             this.setupEventListeners();
             console.log('✓ Event listeners setup');
+            
+            this.showLoadingState('Loading studies...');
             
             // Load all studies from Firestore
             await this.loadStudies();
@@ -36,6 +43,8 @@ class LSTVAnnotationApp {
             await this.updateStats();
             console.log('✓ Statistics updated');
             
+            this.showLoadingState('Loading first study...');
+            
             // Load first available study
             await this.loadNextStudy();
             console.log('✓ First study loaded');
@@ -44,45 +53,106 @@ class LSTVAnnotationApp {
             
         } catch (error) {
             console.error('Initialization error:', error);
-            alert('Error initializing application. Please refresh the page.');
+            this.showErrorState(`Error initializing application: ${error.message}<br><br>Please check:<br>1. You're logged in<br>2. DICOM files exist in Firebase Storage<br>3. Studies exist in Firestore`);
+        }
+    }
+
+    // Show loading state
+    showLoadingState(message) {
+        const loadingDiv = document.getElementById('loadingMessage');
+        if (loadingDiv) {
+            loadingDiv.style.display = 'flex';
+            const messageP = loadingDiv.querySelector('p');
+            if (messageP) {
+                messageP.textContent = message;
+            }
+        }
+        
+        const viewer = document.getElementById('dicomViewer');
+        if (viewer) {
+            viewer.classList.remove('active');
+        }
+    }
+
+    // Show error state
+    showErrorState(message) {
+        const loadingDiv = document.getElementById('loadingMessage');
+        if (loadingDiv) {
+            loadingDiv.style.display = 'flex';
+            loadingDiv.innerHTML = `
+                <div style="text-align: center; color: #ef4444;">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-bottom: 1rem;">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                    <p style="font-size: 1rem; font-weight: 600;">${message}</p>
+                    <button onclick="location.reload()" class="btn btn-primary" style="margin-top: 1rem;">Reload Page</button>
+                </div>
+            `;
         }
     }
 
     // Setup event listeners
     setupEventListeners() {
         // Sign out button
-        document.getElementById('signOutBtn').addEventListener('click', () => {
-            authManager.signOut();
-        });
+        const signOutBtn = document.getElementById('signOutBtn');
+        if (signOutBtn) {
+            signOutBtn.addEventListener('click', () => {
+                authManager.signOut();
+            });
+        }
 
         // Annotation form submission
-        document.getElementById('annotationForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            await this.submitAnnotation();
-        });
+        const form = document.getElementById('annotationForm');
+        if (form) {
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                await this.submitAnnotation();
+            });
+        }
 
         // Skip study button
-        document.getElementById('skipStudy').addEventListener('click', async () => {
-            await this.skipStudy();
-        });
+        const skipBtn = document.getElementById('skipStudy');
+        if (skipBtn) {
+            skipBtn.addEventListener('click', async () => {
+                await this.skipStudy();
+            });
+        }
 
         // Window/level controls
-        document.getElementById('windowLevel').addEventListener('input', (e) => {
-            const wl = parseInt(e.target.value);
-            const ww = parseInt(document.getElementById('windowWidth').value);
-            dicomViewer.setWindowLevel(wl, ww);
-        });
+        const wlControl = document.getElementById('windowLevel');
+        const wwControl = document.getElementById('windowWidth');
+        
+        if (wlControl) {
+            wlControl.addEventListener('input', (e) => {
+                const wl = parseInt(e.target.value);
+                const ww = parseInt(document.getElementById('windowWidth').value);
+                if (dicomViewer) {
+                    dicomViewer.setWindowLevel(wl, ww);
+                }
+            });
+        }
 
-        document.getElementById('windowWidth').addEventListener('input', (e) => {
-            const wl = parseInt(document.getElementById('windowLevel').value);
-            const ww = parseInt(e.target.value);
-            dicomViewer.setWindowLevel(wl, ww);
-        });
+        if (wwControl) {
+            wwControl.addEventListener('input', (e) => {
+                const wl = parseInt(document.getElementById('windowLevel').value);
+                const ww = parseInt(e.target.value);
+                if (dicomViewer) {
+                    dicomViewer.setWindowLevel(wl, ww);
+                }
+            });
+        }
 
         // Reset windowing button
-        document.getElementById('resetWindowing').addEventListener('click', () => {
-            dicomViewer.resetWindowLevel();
-        });
+        const resetBtn = document.getElementById('resetWindowing');
+        if (resetBtn) {
+            resetBtn.addEventListener('click', () => {
+                if (dicomViewer) {
+                    dicomViewer.resetWindowLevel();
+                }
+            });
+        }
     }
 
     // Load all studies from Firestore
@@ -96,6 +166,10 @@ class LSTVAnnotationApp {
             }));
             
             console.log(`Loaded ${this.studies.length} studies from Firestore`);
+            
+            if (this.studies.length === 0) {
+                throw new Error('No studies found in Firestore. Please add studies first.');
+            }
             
         } catch (error) {
             console.error('Error loading studies:', error);
@@ -144,20 +218,26 @@ class LSTVAnnotationApp {
             
             this.currentStudy = study;
             
-            // Select first T2 series (or first series if no T2)
+            // Select first series
+            if (!study.series || study.series.length === 0) {
+                throw new Error('Study has no series defined');
+            }
+            
+            // Prefer T2 series, otherwise use first available
             const t2Series = study.series.find(s => 
-                s.description.toLowerCase().includes('t2')
+                s.description && s.description.toLowerCase().includes('t2')
             );
             this.currentSeries = t2Series || study.series[0];
             
+            console.log(`Loading study ${study.study_id}, series ${this.currentSeries.series_id}`);
+            
             // Update UI
-            document.getElementById('currentStudyId').textContent = study.study_id;
+            document.getElementById('currentStudyId').textContent = study.study_id || 'Unknown';
             document.getElementById('currentSeriesInfo').textContent = 
-                `${this.currentSeries.series_id} - ${this.currentSeries.description}`;
+                `${this.currentSeries.series_id || 'Unknown'} - ${this.currentSeries.description || 'No description'}`;
             
             // Show loading message
-            document.getElementById('loadingMessage').style.display = 'flex';
-            document.getElementById('dicomViewer').classList.remove('active');
+            this.showLoadingState('Loading DICOM files from Firebase Storage...');
             
             // Load DICOM files
             await this.loadDicomFiles(study.study_id, this.currentSeries);
@@ -167,11 +247,14 @@ class LSTVAnnotationApp {
             document.getElementById('dicomViewer').classList.add('active');
             
             // Reset form
-            document.getElementById('annotationForm').reset();
+            const form = document.getElementById('annotationForm');
+            if (form) {
+                form.reset();
+            }
             
         } catch (error) {
             console.error('Error loading study:', error);
-            alert('Error loading study. Please try again.');
+            this.showErrorState(`Error loading study: ${error.message}`);
         }
     }
 
@@ -180,12 +263,19 @@ class LSTVAnnotationApp {
         try {
             console.log(`Loading series ${series.series_id} for study ${studyId}...`);
             
+            // Check if slice_count exists
+            if (!series.slice_count || series.slice_count === 0) {
+                throw new Error('Series has no slice_count defined. Please check Firestore data.');
+            }
+            
             // Generate filenames (assuming sequential: 001.dcm, 002.dcm, etc.)
             const filenames = [];
             for (let i = 1; i <= series.slice_count; i++) {
                 const filename = String(i).padStart(3, '0') + '.dcm';
                 filenames.push(filename);
             }
+            
+            console.log(`Attempting to download ${filenames.length} DICOM files...`);
             
             // Download files from Firebase Storage
             const files = await storageManager.downloadSeries(
@@ -194,17 +284,23 @@ class LSTVAnnotationApp {
                 filenames,
                 (current, total) => {
                     // Update loading progress
-                    const loadingMsg = document.querySelector('.loading-message p');
-                    if (loadingMsg) {
-                        loadingMsg.textContent = `Loading DICOM files: ${current}/${total}`;
-                    }
+                    this.showLoadingState(`Loading DICOM files: ${current}/${total}`);
                 }
             );
             
-            // Load into viewer
-            await dicomViewer.loadImages(files);
+            if (files.length === 0) {
+                throw new Error('No DICOM files downloaded. Check that files exist in Firebase Storage at: dicoms/' + studyId + '/' + series.series_id + '/');
+            }
             
-            console.log(`✓ Loaded ${files.length} images`);
+            console.log(`Downloaded ${files.length} files, loading into viewer...`);
+            
+            // Load into viewer
+            if (dicomViewer) {
+                await dicomViewer.loadImages(files);
+                console.log(`✓ Loaded ${files.length} images into viewer`);
+            } else {
+                throw new Error('DICOM viewer not initialized');
+            }
             
         } catch (error) {
             console.error('Error loading DICOM files:', error);
@@ -238,8 +334,8 @@ class LSTVAnnotationApp {
                 castellvi_type: castellviType,
                 confidence: confidence,
                 notes: notes,
-                current_slice: dicomViewer.getCurrentSlice(),
-                total_slices: dicomViewer.getTotalSlices()
+                current_slice: dicomViewer ? dicomViewer.getCurrentSlice() : 0,
+                total_slices: dicomViewer ? dicomViewer.getTotalSlices() : 0
             };
             
             // Submit to Firestore
@@ -304,16 +400,31 @@ class LSTVAnnotationApp {
 
     // Show completion message
     showCompletionMessage() {
-        alert('🎉 Congratulations! You have reviewed all available studies. Thank you for your contributions!');
+        const loadingDiv = document.getElementById('loadingMessage');
+        if (loadingDiv) {
+            loadingDiv.style.display = 'flex';
+            loadingDiv.innerHTML = `
+                <div style="text-align: center; color: #10b981;">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-bottom: 1rem;">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
+                    <h2 style="font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem;">All Studies Completed!</h2>
+                    <p style="font-size: 1rem;">🎉 Congratulations! You have reviewed all available studies.<br>Thank you for your contributions!</p>
+                </div>
+            `;
+        }
         
         // Clear viewer
-        dicomViewer.clear();
+        if (dicomViewer) {
+            dicomViewer.clear();
+        }
         
-        // Hide viewer, show message
-        document.getElementById('dicomViewer').style.display = 'none';
-        document.getElementById('loadingMessage').style.display = 'flex';
-        document.querySelector('.loading-message p').textContent = 
-            '✓ All studies completed! Thank you for your contributions.';
+        // Hide viewer
+        const viewer = document.getElementById('dicomViewer');
+        if (viewer) {
+            viewer.classList.remove('active');
+        }
     }
 
     // Show success message
@@ -333,14 +444,16 @@ class LSTVAnnotationApp {
             font-weight: 600;
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
             z-index: 9999;
+            animation: fadeIn 0.3s ease-in-out;
         `;
         message.textContent = '✓ Annotation submitted successfully!';
         
         document.body.appendChild(message);
         
         setTimeout(() => {
-            message.remove();
-        }, 2000);
+            message.style.animation = 'fadeOut 0.3s ease-in-out';
+            setTimeout(() => message.remove(), 300);
+        }, 1700);
     }
 }
 

@@ -5,7 +5,7 @@ class StorageManager {
         this.storageRef = this.storage.ref();
         this.cache = new Map(); // Cache for downloaded files
     }
-
+    
     // Get download URL for a DICOM file
     async getDicomUrl(studyId, seriesId, filename) {
         const path = `dicoms/${studyId}/${seriesId}/${filename}`;
@@ -14,7 +14,7 @@ class StorageManager {
         if (this.cache.has(path)) {
             return this.cache.get(path);
         }
-
+        
         try {
             const fileRef = this.storageRef.child(path);
             const url = await fileRef.getDownloadURL();
@@ -25,7 +25,7 @@ class StorageManager {
             throw error;
         }
     }
-
+    
     // Download DICOM file as ArrayBuffer
     async downloadDicom(studyId, seriesId, filename) {
         try {
@@ -43,11 +43,14 @@ class StorageManager {
             throw error;
         }
     }
-
+    
     // Download all DICOMs for a series (with progress callback)
     async downloadSeries(studyId, seriesId, filenames, onProgress) {
         const files = [];
         const total = filenames.length;
+        let successCount = 0;
+        
+        console.log(`Attempting to download ${total} files...`);
         
         for (let i = 0; i < filenames.length; i++) {
             const filename = filenames[i];
@@ -58,20 +61,27 @@ class StorageManager {
                     filename: filename,
                     data: arrayBuffer
                 });
+                successCount++;
                 
                 // Call progress callback
                 if (onProgress) {
-                    onProgress(i + 1, total);
+                    onProgress(successCount, total);
                 }
             } catch (error) {
-                console.error(`Failed to download ${filename}:`, error);
+                console.warn(`Failed to download ${filename}, skipping...`);
                 // Continue with other files
             }
         }
         
+        console.log(`Successfully downloaded ${successCount}/${total} files`);
+        
+        if (files.length === 0) {
+            throw new Error('No DICOM files could be downloaded. Please check Firebase Storage.');
+        }
+        
         return files;
     }
-
+    
     // Clear cache
     clearCache() {
         this.cache.clear();

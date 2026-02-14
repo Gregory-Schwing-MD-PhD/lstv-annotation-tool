@@ -6,21 +6,36 @@ class DicomViewer {
         this.currentImageIndex = 0;
         this.isPlaying = false;
         this.playInterval = null;
+        this.isInitialized = false;
+        
+        if (!this.element) {
+            console.error(`Element with ID '${elementId}' not found!`);
+            return;
+        }
         
         // Initialize Cornerstone
         this.init();
     }
 
     init() {
-        // Configure cornerstoneWADOImageLoader
-        cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
-        cornerstoneWADOImageLoader.external.dicomParser = dicomParser;
-        
-        // Enable the element for Cornerstone
-        cornerstone.enable(this.element);
-        
-        // Setup event listeners
-        this.setupEventListeners();
+        try {
+            // Configure cornerstoneWADOImageLoader
+            if (typeof cornerstoneWADOImageLoader !== 'undefined') {
+                cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
+                cornerstoneWADOImageLoader.external.dicomParser = dicomParser;
+            }
+            
+            // Enable the element for Cornerstone
+            cornerstone.enable(this.element);
+            this.isInitialized = true;
+            
+            // Setup event listeners
+            this.setupEventListeners();
+            
+            console.log('✓ DICOM Viewer initialized');
+        } catch (error) {
+            console.error('Error initializing DICOM viewer:', error);
+        }
     }
 
     setupEventListeners() {
@@ -34,8 +49,11 @@ class DicomViewer {
             }
         });
 
-        // Arrow keys for navigation
-        document.addEventListener('keydown', (e) => {
+        // Arrow keys for navigation - FIXED: Bound to document, not element
+        this.keyboardHandler = (e) => {
+            // Only handle if viewer has images loaded
+            if (this.imageIds.length === 0) return;
+            
             if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
                 e.preventDefault();
                 this.previousImage();
@@ -46,24 +64,34 @@ class DicomViewer {
                 e.preventDefault();
                 this.togglePlay();
             }
-        });
+        };
+        
+        document.addEventListener('keydown', this.keyboardHandler);
 
         // Click and drag for window/level
         let startX, startY, startWL, startWW;
         let isDragging = false;
 
         this.element.addEventListener('mousedown', (e) => {
+            if (this.imageIds.length === 0) return;
+            
             isDragging = true;
             startX = e.clientX;
             startY = e.clientY;
             
-            const viewport = cornerstone.getViewport(this.element);
-            startWL = viewport.voi.windowCenter;
-            startWW = viewport.voi.windowWidth;
+            try {
+                const viewport = cornerstone.getViewport(this.element);
+                if (viewport && viewport.voi) {
+                    startWL = viewport.voi.windowCenter;
+                    startWW = viewport.voi.windowWidth;
+                }
+            } catch (error) {
+                console.error('Error getting viewport:', error);
+            }
         });
 
         document.addEventListener('mousemove', (e) => {
-            if (!isDragging) return;
+            if (!isDragging || this.imageIds.length === 0) return;
             
             const deltaX = e.clientX - startX;
             const deltaY = e.clientY - startY;
@@ -82,6 +110,10 @@ class DicomViewer {
     // Load images from array buffers
     async loadImages(files) {
         console.log(`Loading ${files.length} DICOM images...`);
+        
+        if (files.length === 0) {
+            throw new Error('No DICOM files to load');
+        }
         
         this.imageIds = [];
         
@@ -102,26 +134,32 @@ class DicomViewer {
         // Sort by filename (assuming sequential naming like 001.dcm, 002.dcm)
         this.imageIds.sort((a, b) => a.filename.localeCompare(b.filename));
         
-        console.log(`Loaded ${this.imageIds.length} images`);
+        console.log(`✓ Loaded ${this.imageIds.length} images`);
         
         // Display first image
         if (this.imageIds.length > 0) {
             await this.displayImage(0);
             this.updateSliceInfo();
+        } else {
+            throw new Error('No valid DICOM images loaded');
         }
     }
 
     // Display specific image
     async displayImage(index) {
         if (index < 0 || index >= this.imageIds.length) return;
+        if (!this.isInitialized) {
+            console.error('Viewer not initialized');
+            return;
+        }
         
         this.currentImageIndex = index;
         
         try {
             const imageId = this.imageIds[index].id;
-            await cornerstone.loadAndCacheImage(imageId);
+            const image = await cornerstone.loadAndCacheImage(imageId);
             
-            cornerstone.displayImage(this.element, await cornerstone.loadImage(imageId));
+            cornerstone.displayImage(this.element, image);
             
             this.updateSliceInfo();
         } catch (error) {
@@ -145,21 +183,29 @@ class DicomViewer {
 
     // Set window level and width
     setWindowLevel(center, width) {
-        const viewport = cornerstone.getViewport(this.element);
-        viewport.voi.windowCenter = center;
-        viewport.voi.windowWidth = width;
-        cornerstone.setViewport(this.element, viewport);
+        if (!this.isInitialized || this.imageIds.length === 0) return;
         
-        // Update UI controls
-        const wlControl = document.getElementById('windowLevel');
-        const wwControl = document.getElementById('windowWidth');
-        const wlValue = document.getElementById('windowLevelValue');
-        const wwValue = document.getElementById('windowWidthValue');
-        
-        if (wlControl) wlControl.value = center;
-        if (wwControl) wwControl.value = width;
-        if (wlValue) wlValue.textContent = Math.round(center);
-        if (wwValue) wwValue.textContent = Math.round(width);
+        try {
+            const viewport = cornerstone.getViewport(this.element);
+            if (viewport && viewport.voi) {
+                viewport.voi.windowCenter = center;
+                viewport.voi.windowWidth = width;
+                cornerstone.setViewport(this.element, viewport);
+                
+                // Update UI controls
+                const wlControl = document.getElementById('windowLevel');
+                const wwControl = document.getElementById('windowWidth');
+                const wlValue = document.getElementById('windowLevelValue');
+                const wwValue = document.getElementById('windowWidthValue');
+                
+                if (wlControl) wlControl.value = center;
+                if (wwControl) wwControl.value = width;
+                if (wlValue) wlValue.textContent = Math.round(center);
+                if (wwValue) wwValue.textContent = Math.round(width);
+            }
+        } catch (error) {
+            console.error('Error setting window level:', error);
+        }
     }
 
     // Reset window/level
@@ -178,6 +224,8 @@ class DicomViewer {
 
     // Start cine play
     play() {
+        if (this.imageIds.length === 0) return;
+        
         this.isPlaying = true;
         this.playInterval = setInterval(() => {
             if (this.currentImageIndex < this.imageIds.length - 1) {
@@ -226,7 +274,29 @@ class DicomViewer {
         this.stop();
         this.imageIds = [];
         this.currentImageIndex = 0;
-        cornerstone.reset(this.element);
+        
+        if (this.isInitialized) {
+            try {
+                cornerstone.reset(this.element);
+            } catch (error) {
+                console.error('Error resetting cornerstone:', error);
+            }
+        }
+    }
+    
+    // Cleanup
+    destroy() {
+        this.clear();
+        if (this.keyboardHandler) {
+            document.removeEventListener('keydown', this.keyboardHandler);
+        }
+        if (this.isInitialized) {
+            try {
+                cornerstone.disable(this.element);
+            } catch (error) {
+                console.error('Error disabling cornerstone:', error);
+            }
+        }
     }
 }
 
