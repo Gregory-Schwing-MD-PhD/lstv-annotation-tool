@@ -132,14 +132,16 @@ class DicomViewer {
         }
 
         // Sort by filename (assuming sequential naming like 001.dcm, 002.dcm)
-        this.imageIds.sort((a, b) => a.filename.localeCompare(b.filename));
+        this.imageIds.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
         
         console.log(`✓ Loaded ${this.imageIds.length} images`);
         
         // Display first image
         if (this.imageIds.length > 0) {
+            console.log('Displaying first image...');
             await this.displayImage(0);
             this.updateSliceInfo();
+            console.log('✓ First image displayed');
         } else {
             throw new Error('No valid DICOM images loaded');
         }
@@ -147,7 +149,10 @@ class DicomViewer {
 
     // Display specific image
     async displayImage(index) {
-        if (index < 0 || index >= this.imageIds.length) return;
+        if (index < 0 || index >= this.imageIds.length) {
+            console.error(`Invalid image index: ${index}`);
+            return;
+        }
         if (!this.isInitialized) {
             console.error('Viewer not initialized');
             return;
@@ -157,11 +162,34 @@ class DicomViewer {
         
         try {
             const imageId = this.imageIds[index].id;
+            console.log(`Displaying image ${index + 1}/${this.imageIds.length}: ${imageId}`);
+            
             const image = await cornerstone.loadAndCacheImage(imageId);
             
             cornerstone.displayImage(this.element, image);
             
+            // Set default window/level after first image loads
+            if (index === 0) {
+                const viewport = cornerstone.getViewport(this.element);
+                if (viewport && viewport.voi) {
+                    // Use image's default window/level if available
+                    if (image.windowCenter && image.windowWidth) {
+                        viewport.voi.windowCenter = image.windowCenter;
+                        viewport.voi.windowWidth = image.windowWidth;
+                    } else {
+                        // Fallback to reasonable defaults
+                        viewport.voi.windowCenter = 40;
+                        viewport.voi.windowWidth = 400;
+                    }
+                    cornerstone.setViewport(this.element, viewport);
+                    
+                    // Update UI controls
+                    this.setWindowLevel(viewport.voi.windowCenter, viewport.voi.windowWidth);
+                }
+            }
+            
             this.updateSliceInfo();
+            console.log(`✓ Image ${index + 1} displayed successfully`);
         } catch (error) {
             console.error('Error displaying image:', error);
         }
