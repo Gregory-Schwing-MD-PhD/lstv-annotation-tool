@@ -177,17 +177,30 @@ body {
     100% { transform: rotate(360deg); }
 }
 
+/* ===== CRITICAL FIX FOR BLACK BOX ===== */
 .dicom-viewer {
     width: 100%;
     min-height: 600px;
+    height: 600px;
     background-color: #000;
     border-radius: 4px;
     display: none;
     position: relative;
+    overflow: hidden;
 }
 
 .dicom-viewer.active {
-    display: block;
+    display: block !important;
+}
+
+/* CRITICAL: Force Cornerstone canvas to render */
+.dicom-viewer canvas {
+    width: 100% !important;
+    height: 100% !important;
+    display: block !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
 }
 
 .viewer-controls {
