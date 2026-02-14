@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LSTV Annotation Tool - Dual View</title>
+    <title>LSTV Annotation Tool</title>
     
     <!-- CSS -->
     <link rel="stylesheet" href="static/css/style.css">
     
-    <!-- Firebase SDK -->
+    <!-- Firebase SDK - MUST LOAD FIRST! -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
@@ -23,7 +23,7 @@
     <!-- Header -->
     <header class="header">
         <div class="header-content">
-            <h1>LSTV Annotation Tool - Dual View</h1>
+            <h1>LSTV Annotation Tool</h1>
             <div class="user-info">
                 <span id="userName" class="user-name"></span>
                 <button id="signOutBtn" class="btn btn-secondary">Sign Out</button>
@@ -59,38 +59,33 @@
                 <h2>Current Study</h2>
                 <div class="study-details">
                     <span class="study-id">Study ID: <strong id="currentStudyId">-</strong></span>
-                    <span class="series-info">
-                        Axial: <strong><span id="axialSlice">0</span> / <span id="axialTotal">0</span></strong> | 
-                        Sagittal: <strong><span id="sagittalSlice">0</span> / <span id="sagittalTotal">0</span></strong>
-                    </span>
+                    <span class="series-info">Series: <strong id="currentSeriesInfo">-</strong></span>
+                    <span class="slice-info">Slice: <strong><span id="currentSlice">0</span> / <span id="totalSlices">0</span></strong></span>
                 </div>
             </div>
         </section>
 
         <!-- DICOM Viewer and Annotation Form -->
-        <div class="viewer-container-dual">
-            <!-- Dual DICOM Viewers -->
-            <div class="viewer-section-dual">
+        <div class="viewer-container">
+            <!-- DICOM Viewer -->
+            <div class="viewer-section">
                 <div id="loadingMessage" class="loading-message">
                     <div class="loader"></div>
                     <p>Loading study from Firebase Storage...</p>
                 </div>
-                
-                <!-- Dual View Container -->
-                <div id="dualViewContainer" class="dual-view-container" style="display:none;">
-                    <div class="view-panel">
-                        <div class="view-label">Axial (↑↓ to scroll)</div>
-                        <div id="axialViewer" class="dicom-viewer"></div>
-                    </div>
-                    <div class="view-panel">
-                        <div class="view-label">Sagittal (←→ to scroll)</div>
-                        <div id="sagittalViewer" class="dicom-viewer"></div>
-                    </div>
-                </div>
-                
+                <div id="dicomViewer" class="dicom-viewer"></div>
                 <div class="viewer-controls">
-                    <button id="resetWindowing" class="btn btn-secondary btn-sm">Reset Window/Level</button>
-                    <div class="control-hint">💡 Drag on images to adjust window/level | Green line shows slice position</div>
+                    <div class="control-group">
+                        <label>Window Level:</label>
+                        <input type="range" id="windowLevel" min="-500" max="500" value="0" step="10">
+                        <span id="windowLevelValue">0</span>
+                    </div>
+                    <div class="control-group">
+                        <label>Window Width:</label>
+                        <input type="range" id="windowWidth" min="1" max="2000" value="400" step="10">
+                        <span id="windowWidthValue">400</span>
+                    </div>
+                    <button id="resetWindowing" class="btn btn-secondary btn-sm">Reset</button>
                 </div>
             </div>
 
@@ -174,13 +169,12 @@
 
                 <!-- Instructions Panel -->
                 <div class="instructions-panel">
-                    <h4>Controls</h4>
+                    <h4>Instructions</h4>
                     <ul>
-                        <li><strong>Arrow Up/Down:</strong> Scroll axial slices</li>
-                        <li><strong>Arrow Left/Right:</strong> Scroll sagittal slices</li>
-                        <li><strong>Mouse Wheel:</strong> Scroll on each view</li>
+                        <li><strong>Mouse Wheel:</strong> Scroll through slices</li>
                         <li><strong>Click + Drag:</strong> Adjust window/level</li>
-                        <li><strong>Green Line:</strong> Shows current slice position</li>
+                        <li><strong>Arrow Keys:</strong> Navigate slices</li>
+                        <li><strong>Spacebar:</strong> Play/pause cine loop</li>
                     </ul>
                 </div>
             </div>
@@ -200,10 +194,10 @@
     <!-- 2. Application Modules - Can load in any order after config -->
     <script src="static/js/auth.js"></script>
     <script src="static/js/storage.js"></script>
-    <script src="static/js/viewer_dual.js"></script>
+    <script src="static/js/viewer.js"></script>
     <script src="static/js/annotations.js"></script>
     
     <!-- 3. Main App - MUST BE LAST (depends on all modules) -->
-    <script src="static/js/app_dual.js"></script>
+    <script src="static/js/app.js"></script>
 </body>
 </html>
