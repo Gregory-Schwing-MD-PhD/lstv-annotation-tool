@@ -1,4 +1,4 @@
-// Dual-View DICOM Viewer with PROPER coordinate system synchronization
+// Dual-View DICOM Viewer - FIXED CROSSHAIR COORDINATES
 class DualDicomViewer {
     constructor(axialElementId, sagittalElementId) {
         this.axialElement = document.getElementById(axialElementId);
@@ -7,8 +7,8 @@ class DualDicomViewer {
         this.axialImageIds = [];
         this.sagittalImageIds = [];
         
-        // Store DICOM metadata for each slice
-        this.axialMetadata = []; // {position: [x,y,z], spacing: [x,y], orientation: [...]}
+        // Store DICOM metadata
+        this.axialMetadata = [];
         this.sagittalMetadata = [];
         
         this.currentAxialIndex = 0;
@@ -46,7 +46,6 @@ class DualDicomViewer {
     }
 
     setupEventListeners() {
-        // Mouse wheel
         this.axialElement.addEventListener('wheel', (e) => {
             e.preventDefault();
             if (e.deltaY < 0) {
@@ -65,7 +64,6 @@ class DualDicomViewer {
             }
         });
 
-        // Arrow keys
         this.keyboardHandler = (e) => {
             if (this.axialImageIds.length === 0 && this.sagittalImageIds.length === 0) return;
             
@@ -88,8 +86,6 @@ class DualDicomViewer {
         };
         
         document.addEventListener('keydown', this.keyboardHandler);
-
-        // Window/level
         this.setupWindowLevel(this.axialElement);
         this.setupWindowLevel(this.sagittalElement);
     }
@@ -140,7 +136,6 @@ class DualDicomViewer {
         });
     }
 
-    // Extract DICOM metadata from image
     async extractMetadata(imageId) {
         try {
             const image = await cornerstone.loadImage(imageId);
@@ -153,7 +148,6 @@ class DualDicomViewer {
                 columns: image.columns || 512
             };
             
-            // Try to get ImagePositionPatient (x, y, z in mm)
             if (image.data && image.data.string) {
                 const ipp = image.data.string('x00200032');
                 if (ipp) {
@@ -180,7 +174,6 @@ class DualDicomViewer {
                 }
             }
             
-            // Fallback to direct properties
             if (!metadata.position && image.imagePositionPatient) {
                 metadata.position = image.imagePositionPatient;
             }
@@ -198,11 +191,9 @@ class DualDicomViewer {
         }
     }
 
-    // Load images for both views CONCURRENTLY
     async loadDualSeries(axialFiles, sagittalFiles) {
         console.log(`Loading dual series: ${axialFiles.length} axial, ${sagittalFiles.length} sagittal`);
         
-        // Make both viewers visible FIRST
         this.axialElement.style.display = 'block';
         this.axialElement.style.width = '100%';
         this.axialElement.style.height = '600px';
@@ -211,7 +202,6 @@ class DualDicomViewer {
         this.sagittalElement.style.width = '100%';
         this.sagittalElement.style.height = '600px';
         
-        // Load BOTH series concurrently
         await Promise.all([
             this.loadAxialSeries(axialFiles),
             this.loadSagittalSeries(sagittalFiles)
@@ -219,17 +209,14 @@ class DualDicomViewer {
         
         console.log('✓ Both series loaded');
         
-        // Find middle slices
         const axialStart = Math.floor(this.axialImageIds.length / 2);
         const sagittalStart = Math.floor(this.sagittalImageIds.length / 2);
         
-        // Display both concurrently
         await Promise.all([
             this.displayAxialImage(axialStart),
             this.displaySagittalImage(sagittalStart)
         ]);
         
-        // Resize after a moment
         setTimeout(() => {
             try {
                 cornerstone.resize(this.axialElement, true);
@@ -271,7 +258,6 @@ class DualDicomViewer {
         
         this.axialImageIds.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
         
-        // Extract metadata
         console.log('Extracting axial metadata...');
         for (const imageInfo of this.axialImageIds) {
             const metadata = await this.extractMetadata(imageInfo.id);
@@ -299,7 +285,6 @@ class DualDicomViewer {
         
         this.sagittalImageIds.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
         
-        // Extract metadata
         console.log('Extracting sagittal metadata...');
         for (const imageInfo of this.sagittalImageIds) {
             const metadata = await this.extractMetadata(imageInfo.id);
@@ -322,7 +307,6 @@ class DualDicomViewer {
             cornerstone.displayImage(this.axialElement, image);
             cornerstone.updateImage(this.axialElement);
             
-            // Set window/level on first load
             if (index === Math.floor(this.axialImageIds.length / 2)) {
                 const viewport = cornerstone.getViewport(this.axialElement);
                 if (viewport && viewport.voi) {
@@ -357,7 +341,6 @@ class DualDicomViewer {
             cornerstone.displayImage(this.sagittalElement, image);
             cornerstone.updateImage(this.sagittalElement);
             
-            // Set window/level on first load
             if (index === Math.floor(this.sagittalImageIds.length / 2)) {
                 const viewport = cornerstone.getViewport(this.sagittalElement);
                 if (viewport && viewport.voi) {
@@ -379,13 +362,12 @@ class DualDicomViewer {
         }
     }
 
-    // Update BOTH crosshairs at once
     updateCrosshairs() {
         this.drawCrosshairOnAxial();
         this.drawCrosshairOnSagittal();
     }
 
-    // Draw crosshair on AXIAL showing current sagittal X-position
+    // SIMPLIFIED: Just use the middle of the image since we're scrolling through stacks
     drawCrosshairOnAxial() {
         try {
             const canvas = this.axialElement.querySelector('canvas');
@@ -394,45 +376,24 @@ class DualDicomViewer {
             const context = canvas.getContext('2d');
             if (!context) return;
             
-            // Redraw image first
             cornerstone.updateImage(this.axialElement);
             
             requestAnimationFrame(() => {
-                // Get current sagittal X-position (in world coordinates)
-                const sagMeta = this.sagittalMetadata[this.currentSagittalIndex];
-                if (!sagMeta || !sagMeta.position) {
-                    // Fallback: just use percentage
-                    const x = (this.currentSagittalIndex / Math.max(1, this.sagittalImageIds.length - 1)) * canvas.width;
-                    this.drawVerticalLine(context, canvas, x);
-                    return;
+                // SIMPLIFIED: For now, just draw at center or use simple percentage
+                // The sagittal stack goes left-right, so we map sagittal index to X position
+                const totalSagittal = this.sagittalImageIds.length;
+                const currentSagittal = this.currentSagittalIndex;
+                
+                if (totalSagittal > 0) {
+                    // Map sagittal slice index to X position on axial canvas
+                    // Middle sagittal = middle of axial canvas
+                    const normalizedPosition = currentSagittal / (totalSagittal - 1);
+                    const canvasX = normalizedPosition * canvas.width;
+                    
+                    console.log(`Axial crosshair: sagittal ${currentSagittal}/${totalSagittal} -> X=${canvasX.toFixed(0)}/${canvas.width}`);
+                    
+                    this.drawVerticalLine(context, canvas, canvasX);
                 }
-                
-                const sagX = sagMeta.position[0]; // World X of current sagittal slice
-                
-                // Get axial metadata
-                const axMeta = this.axialMetadata[this.currentAxialIndex];
-                if (!axMeta || !axMeta.position || !axMeta.spacing) {
-                    const x = (this.currentSagittalIndex / Math.max(1, this.sagittalImageIds.length - 1)) * canvas.width;
-                    this.drawVerticalLine(context, canvas, x);
-                    return;
-                }
-                
-                // Convert world X to pixel X on this axial slice
-                // ImagePosition gives top-left corner position
-                // We need to find where sagX falls in the axial image
-                const axialX0 = axMeta.position[0]; // X at pixel column 0
-                const pixelSpacingX = axMeta.spacing[0]; // mm per pixel in X
-                
-                // Calculate pixel column
-                const pixelX = (sagX - axialX0) / pixelSpacingX;
-                
-                // Map to canvas coordinates
-                const canvasX = (pixelX / axMeta.columns) * canvas.width;
-                
-                // Clamp to canvas bounds
-                const finalX = Math.max(0, Math.min(canvas.width, canvasX));
-                
-                this.drawVerticalLine(context, canvas, finalX);
             });
             
         } catch (error) {
@@ -440,7 +401,6 @@ class DualDicomViewer {
         }
     }
 
-    // Draw crosshair on SAGITTAL showing current axial Z-position
     drawCrosshairOnSagittal() {
         try {
             const canvas = this.sagittalElement.querySelector('canvas');
@@ -449,48 +409,25 @@ class DualDicomViewer {
             const context = canvas.getContext('2d');
             if (!context) return;
             
-            // Redraw image first
             cornerstone.updateImage(this.sagittalElement);
             
             requestAnimationFrame(() => {
-                // Get current axial Z-position (in world coordinates)
-                const axMeta = this.axialMetadata[this.currentAxialIndex];
-                if (!axMeta || !axMeta.position) {
-                    // Fallback: just use percentage
-                    const y = (this.currentAxialIndex / Math.max(1, this.axialImageIds.length - 1)) * canvas.height;
-                    this.drawHorizontalLine(context, canvas, y);
-                    return;
+                // SIMPLIFIED: For now, just use simple percentage
+                // The axial stack goes superior-inferior (top-bottom), map to Y position
+                const totalAxial = this.axialImageIds.length;
+                const currentAxial = this.currentAxialIndex;
+                
+                if (totalAxial > 0) {
+                    // Map axial slice index to Y position on sagittal canvas
+                    // First axial (top of head) = top of sagittal
+                    // Last axial (bottom) = bottom of sagittal
+                    const normalizedPosition = currentAxial / (totalAxial - 1);
+                    const canvasY = normalizedPosition * canvas.height;
+                    
+                    console.log(`Sagittal crosshair: axial ${currentAxial}/${totalAxial} -> Y=${canvasY.toFixed(0)}/${canvas.height}`);
+                    
+                    this.drawHorizontalLine(context, canvas, canvasY);
                 }
-                
-                const axZ = axMeta.position[2]; // World Z of current axial slice
-                
-                // Get sagittal metadata
-                const sagMeta = this.sagittalMetadata[this.currentSagittalIndex];
-                if (!sagMeta || !sagMeta.position || !sagMeta.spacing) {
-                    const y = (this.currentAxialIndex / Math.max(1, this.axialImageIds.length - 1)) * canvas.height;
-                    this.drawHorizontalLine(context, canvas, y);
-                    return;
-                }
-                
-                // For sagittal view:
-                // - Columns (X) represent anterior-posterior
-                // - Rows (Y) represent superior-inferior (Z in world coords)
-                
-                // We need to find which row corresponds to axZ
-                // Sagittal ImagePosition gives top-left corner
-                const sagZ0 = sagMeta.position[2]; // Z at pixel row 0
-                const pixelSpacingY = sagMeta.spacing[1]; // mm per pixel in Y (which is Z-direction)
-                
-                // Calculate pixel row
-                const pixelY = (sagZ0 - axZ) / pixelSpacingY; // Note: Z usually decreases going down
-                
-                // Map to canvas coordinates
-                const canvasY = (pixelY / sagMeta.rows) * canvas.height;
-                
-                // Clamp to canvas bounds
-                const finalY = Math.max(0, Math.min(canvas.height, canvasY));
-                
-                this.drawHorizontalLine(context, canvas, finalY);
             });
             
         } catch (error) {
@@ -522,7 +459,6 @@ class DualDicomViewer {
         context.restore();
     }
 
-    // Navigation
     async nextAxialImage() {
         if (this.currentAxialIndex < this.axialImageIds.length - 1) {
             await this.displayAxialImage(this.currentAxialIndex + 1);
