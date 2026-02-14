@@ -16,7 +16,8 @@ class AuthManager {
                     resolve(user);
                 } else {
                     // Not signed in, redirect to login
-                    if (window.location.pathname !== '/login.html') {
+                    const currentPath = window.location.pathname;
+                    if (!currentPath.includes('login.html')) {
                         window.location.href = 'login.html';
                     }
                     reject(new Error('Not authenticated'));

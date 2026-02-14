@@ -51,11 +51,8 @@
     
     <!-- Login Script -->
     <script>
-        // Initialize Firebase
-        firebase.initializeApp(firebaseConfig);
-        const auth = firebase.auth();
-        const googleProvider = new firebase.auth.GoogleAuthProvider();
-
+        // Firebase already initialized in config.js - just use it
+        
         // Check if already signed in
         auth.onAuthStateChanged((user) => {
             if (user) {
