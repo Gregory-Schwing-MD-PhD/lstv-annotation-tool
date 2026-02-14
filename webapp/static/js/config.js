@@ -1,13 +1,11 @@
 // Firebase Configuration
-// IMPORTANT: Replace these values with your actual Firebase config
-
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY_HERE",
-    authDomain: "lstv-annotation-tool.firebaseapp.com",
-    projectId: "lstv-annotation-tool",
-    storageBucket: "lstv-annotation-tool.appspot.com",
-    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-    appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyBrYhf0kOBOouieiKZpjc0Nu5NN0qk8xI8",
+  authDomain: "lstv-annotation-tool.firebaseapp.com",
+  projectId: "lstv-annotation-tool",
+  storageBucket: "lstv-annotation-tool.firebasestorage.app",
+  messagingSenderId: "525812647843",
+  appId: "1:525812647843:web:dd6fc8e55513fdca1a3c16"
 };
 
 // Initialize Firebase (will be used by other scripts)
