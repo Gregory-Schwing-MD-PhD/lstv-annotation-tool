@@ -189,16 +189,27 @@ class DualDicomViewer {
             console.log(`✓ Loaded ${this.sagittalImageIds.length} sagittal images`);
         }
 
+        // CRITICAL FIX: Make viewers visible BEFORE displaying images
+        this.axialElement.style.display = 'block';
+        this.axialElement.style.width = '100%';
+        this.axialElement.style.height = '600px';
+        
+        this.sagittalElement.style.display = 'block';
+        this.sagittalElement.style.width = '100%';
+        this.sagittalElement.style.height = '600px';
+
         // Display first images
         if (this.axialImageIds.length > 0) {
-            await this.displayAxialImage(Math.floor(this.axialImageIds.length / 2)); // Start at middle
+            const startIndex = Math.floor(this.axialImageIds.length / 2);
+            await this.displayAxialImage(startIndex); // Start at middle
             
             // Force resize after a moment
             setTimeout(() => {
                 try {
                     cornerstone.resize(this.axialElement, true);
+                    cornerstone.updateImage(this.axialElement); // CRITICAL: Force redraw
                     this.drawCrosshair(this.axialElement, 'sagittal');
-                    console.log('✓ Axial resized');
+                    console.log('✓ Axial resized and redrawn');
                 } catch (e) {
                     console.error('Error resizing axial:', e);
                 }
@@ -206,14 +217,16 @@ class DualDicomViewer {
         }
 
         if (this.sagittalImageIds.length > 0) {
-            await this.displaySagittalImage(Math.floor(this.sagittalImageIds.length / 2)); // Start at middle
+            const startIndex = Math.floor(this.sagittalImageIds.length / 2);
+            await this.displaySagittalImage(startIndex); // Start at middle
             
             // Force resize after a moment
             setTimeout(() => {
                 try {
                     cornerstone.resize(this.sagittalElement, true);
+                    cornerstone.updateImage(this.sagittalElement); // CRITICAL: Force redraw
                     this.drawCrosshair(this.sagittalElement, 'axial');
-                    console.log('✓ Sagittal resized');
+                    console.log('✓ Sagittal resized and redrawn');
                 } catch (e) {
                     console.error('Error resizing sagittal:', e);
                 }
@@ -235,6 +248,8 @@ class DualDicomViewer {
             const image = await cornerstone.loadAndCacheImage(imageId);
             
             cornerstone.displayImage(this.axialElement, image);
+            
+            // CRITICAL: Force immediate update
             cornerstone.updateImage(this.axialElement);
             
             // Set window/level on first load
@@ -253,7 +268,7 @@ class DualDicomViewer {
             }
             
             // Draw crosshair showing sagittal position
-            this.drawCrosshair(this.axialElement, 'sagittal');
+            setTimeout(() => this.drawCrosshair(this.axialElement, 'sagittal'), 10);
             
         } catch (error) {
             console.error('Error displaying axial image:', error);
@@ -272,6 +287,8 @@ class DualDicomViewer {
             const image = await cornerstone.loadAndCacheImage(imageId);
             
             cornerstone.displayImage(this.sagittalElement, image);
+            
+            // CRITICAL: Force immediate update
             cornerstone.updateImage(this.sagittalElement);
             
             // Set window/level on first load
@@ -290,7 +307,7 @@ class DualDicomViewer {
             }
             
             // Draw crosshair showing axial position
-            this.drawCrosshair(this.sagittalElement, 'axial');
+            setTimeout(() => this.drawCrosshair(this.sagittalElement, 'axial'), 10);
             
         } catch (error) {
             console.error('Error displaying sagittal image:', error);
@@ -301,42 +318,51 @@ class DualDicomViewer {
     drawCrosshair(element, orientation) {
         try {
             const canvas = element.querySelector('canvas');
-            if (!canvas) return;
+            if (!canvas) {
+                console.warn('No canvas found for crosshair');
+                return;
+            }
             
             const context = canvas.getContext('2d');
-            const viewport = cornerstone.getViewport(element);
+            if (!context) {
+                console.warn('No 2D context for crosshair');
+                return;
+            }
             
             // Redraw the image first to clear previous crosshair
             cornerstone.updateImage(element);
             
-            // Calculate crosshair position
-            let position;
-            if (orientation === 'axial') {
-                // Draw horizontal line on sagittal showing axial slice position
-                position = (this.currentAxialIndex / Math.max(1, this.axialImageIds.length - 1)) * canvas.height;
-            } else {
-                // Draw vertical line on axial showing sagittal slice position
-                position = (this.currentSagittalIndex / Math.max(1, this.sagittalImageIds.length - 1)) * canvas.width;
-            }
-            
-            // Draw the crosshair line
-            context.save();
-            context.strokeStyle = '#00ff00'; // Bright green
-            context.lineWidth = 2;
-            context.setLineDash([5, 5]); // Dashed line
-            
-            context.beginPath();
-            if (orientation === 'axial') {
-                // Horizontal line
-                context.moveTo(0, position);
-                context.lineTo(canvas.width, position);
-            } else {
-                // Vertical line
-                context.moveTo(position, 0);
-                context.lineTo(position, canvas.height);
-            }
-            context.stroke();
-            context.restore();
+            // Wait a tick for the image to render
+            requestAnimationFrame(() => {
+                // Calculate crosshair position
+                let position;
+                if (orientation === 'axial') {
+                    // Draw horizontal line on sagittal showing axial slice position
+                    position = (this.currentAxialIndex / Math.max(1, this.axialImageIds.length - 1)) * canvas.height;
+                } else {
+                    // Draw vertical line on axial showing sagittal slice position
+                    position = (this.currentSagittalIndex / Math.max(1, this.sagittalImageIds.length - 1)) * canvas.width;
+                }
+                
+                // Draw the crosshair line
+                context.save();
+                context.strokeStyle = '#00ff00'; // Bright green
+                context.lineWidth = 2;
+                context.setLineDash([5, 5]); // Dashed line
+                
+                context.beginPath();
+                if (orientation === 'axial') {
+                    // Horizontal line
+                    context.moveTo(0, position);
+                    context.lineTo(canvas.width, position);
+                } else {
+                    // Vertical line
+                    context.moveTo(position, 0);
+                    context.lineTo(position, canvas.height);
+                }
+                context.stroke();
+                context.restore();
+            });
             
         } catch (error) {
             console.error('Error drawing crosshair:', error);
@@ -383,20 +409,28 @@ class DualDicomViewer {
     // Reset window/level
     resetWindowLevel() {
         if (this.axialImageIds.length > 0) {
-            const viewport = cornerstone.getViewport(this.axialElement);
-            if (viewport && viewport.voi) {
-                viewport.voi.windowCenter = 40;
-                viewport.voi.windowWidth = 400;
-                cornerstone.setViewport(this.axialElement, viewport);
+            try {
+                const viewport = cornerstone.getViewport(this.axialElement);
+                if (viewport && viewport.voi) {
+                    viewport.voi.windowCenter = 40;
+                    viewport.voi.windowWidth = 400;
+                    cornerstone.setViewport(this.axialElement, viewport);
+                }
+            } catch (e) {
+                console.error('Error resetting axial window/level:', e);
             }
         }
         
         if (this.sagittalImageIds.length > 0) {
-            const viewport = cornerstone.getViewport(this.sagittalElement);
-            if (viewport && viewport.voi) {
-                viewport.voi.windowCenter = 40;
-                viewport.voi.windowWidth = 400;
-                cornerstone.setViewport(this.sagittalElement, viewport);
+            try {
+                const viewport = cornerstone.getViewport(this.sagittalElement);
+                if (viewport && viewport.voi) {
+                    viewport.voi.windowCenter = 40;
+                    viewport.voi.windowWidth = 400;
+                    cornerstone.setViewport(this.sagittalElement, viewport);
+                }
+            } catch (e) {
+                console.error('Error resetting sagittal window/level:', e);
             }
         }
     }
