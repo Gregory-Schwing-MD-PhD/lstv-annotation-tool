@@ -8,7 +8,7 @@
     <!-- CSS -->
     <link rel="stylesheet" href="static/css/style.css">
     
-    <!-- Firebase SDK -->
+    <!-- Firebase SDK - Load these FIRST -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
 </head>
@@ -37,6 +37,7 @@
                 </button>
                 
                 <div id="errorMessage" class="error-message" style="display:none;"></div>
+                <div id="statusMessage" style="margin-top: 1rem; text-align: center; color: #666; font-size: 0.875rem;"></div>
             </div>
             
             <div class="login-footer">
@@ -46,34 +47,67 @@
         </div>
     </div>
 
-    <!-- Firebase Config -->
-    <script src="static/js/config.js"></script>
-    
     <!-- Login Script -->
     <script>
-        // Firebase already initialized in config.js - just use it
+        // Show status
+        const statusEl = document.getElementById('statusMessage');
+        const errorEl = document.getElementById('errorMessage');
         
-        // Check if already signed in
-        auth.onAuthStateChanged((user) => {
-            if (user) {
-                // Redirect to main app
-                window.location.href = 'index.html';
-            }
-        });
+        statusEl.textContent = 'Initializing Firebase...';
+        
+        // Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBrYhf0kOBOouieiKZpjc0Nu5NN0qk8xI8",
+            authDomain: "lstv-annotation-tool.firebaseapp.com",
+            projectId: "lstv-annotation-tool",
+            storageBucket: "lstv-annotation-tool.firebasestorage.app",
+            messagingSenderId: "525812647843",
+            appId: "1:525812647843:web:dd6fc8e55513fdca1a3c16"
+        };
 
-        // Google Sign-In
-        document.getElementById('googleSignInBtn').addEventListener('click', async () => {
-            try {
-                const result = await auth.signInWithPopup(googleProvider);
-                console.log('Signed in:', result.user.email);
-                // Redirect happens automatically via onAuthStateChanged
-            } catch (error) {
-                console.error('Sign-in error:', error);
-                const errorDiv = document.getElementById('errorMessage');
-                errorDiv.textContent = `Error: ${error.message}`;
-                errorDiv.style.display = 'block';
-            }
-        });
+        // Initialize Firebase
+        try {
+            firebase.initializeApp(firebaseConfig);
+            console.log('✅ Firebase initialized');
+            statusEl.textContent = 'Ready to sign in';
+            
+            const auth = firebase.auth();
+            const googleProvider = new firebase.auth.GoogleAuthProvider();
+            
+            // Check if already signed in
+            auth.onAuthStateChanged((user) => {
+                if (user) {
+                    console.log('User already signed in:', user.email);
+                    statusEl.textContent = 'Redirecting...';
+                    window.location.href = 'index.html';
+                }
+            });
+
+            // Google Sign-In
+            document.getElementById('googleSignInBtn').addEventListener('click', async () => {
+                console.log('Sign in button clicked');
+                statusEl.textContent = 'Opening sign-in popup...';
+                errorEl.style.display = 'none';
+                
+                try {
+                    const result = await auth.signInWithPopup(googleProvider);
+                    console.log('✅ Signed in:', result.user.email);
+                    statusEl.textContent = 'Success! Redirecting...';
+                    // Redirect happens automatically via onAuthStateChanged
+                } catch (error) {
+                    console.error('❌ Sign-in error:', error);
+                    statusEl.textContent = '';
+                    errorEl.textContent = `Error: ${error.message}`;
+                    errorEl.style.display = 'block';
+                }
+            });
+            
+        } catch (error) {
+            console.error('❌ Firebase initialization error:', error);
+            statusEl.textContent = '';
+            errorEl.textContent = `Initialization error: ${error.message}`;
+            errorEl.style.display = 'block';
+        }
     </script>
 </body>
 </html>
