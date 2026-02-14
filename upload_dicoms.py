@@ -289,17 +289,48 @@ def main():
     with open(service_account_path) as f:
         service_account_data = json.load(f)
         project_id = service_account_data['project_id']
-        bucket_name = f"{project_id}.appspot.com"
+    
+    # Try multiple bucket name formats
+    bucket_options = [
+        f"{project_id}.firebasestorage.app",  # New Firebase Storage domain
+        f"{project_id}.appspot.com"            # Legacy App Engine domain
+    ]
     
     print(f"📋 Configuration:")
     print(f"   Project: {project_id}")
-    print(f"   Bucket: {bucket_name}")
     print(f"   DICOM directory: {dicom_directory}")
     print(f"   Mode: {'TRIAL (3 studies)' if trial_mode else 'FULL UPLOAD'}")
-    print()
+    print(f"\n🔍 Detecting correct storage bucket...")
     
-    # Create uploader
-    uploader = DicomUploader(service_account_path, bucket_name)
+    # Try to initialize with each bucket option
+    uploader = None
+    for bucket_name in bucket_options:
+        try:
+            print(f"   Trying: {bucket_name}...", end='')
+            uploader = DicomUploader(service_account_path, bucket_name)
+            # Test if bucket exists by trying to list
+            list(uploader.bucket.list_blobs(max_results=1))
+            print(f" ✅")
+            print(f"   Using bucket: {bucket_name}\n")
+            break
+        except Exception as e:
+            print(f" ❌")
+            if "does not exist" in str(e):
+                continue
+            else:
+                # Other error, re-raise
+                raise
+    
+    if not uploader:
+        print(f"\n❌ Error: Could not find Firebase Storage bucket.")
+        print(f"\nPlease verify your Firebase Storage setup:")
+        print(f"1. Go to: https://console.firebase.google.com/project/{project_id}/storage")
+        print(f"2. Make sure Firebase Storage is enabled")
+        print(f"3. Check the bucket name in the Firebase Console")
+        print(f"\nExpected bucket names tried:")
+        for bucket in bucket_options:
+            print(f"   - {bucket}")
+        sys.exit(1)
     
     # Upload studies
     max_studies = 3 if trial_mode else None
