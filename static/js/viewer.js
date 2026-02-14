@@ -139,7 +139,24 @@ class DicomViewer {
         // Display first image
         if (this.imageIds.length > 0) {
             console.log('Displaying first image...');
+            
+            // Force element to be visible before rendering
+            this.element.style.display = 'block';
+            this.element.style.width = '100%';
+            this.element.style.height = '600px';
+            
             await this.displayImage(0);
+            
+            // Force Cornerstone to resize/render
+            setTimeout(() => {
+                try {
+                    cornerstone.resize(this.element, true);
+                    console.log('✓ Cornerstone resized');
+                } catch (e) {
+                    console.error('Error resizing:', e);
+                }
+            }, 100);
+            
             this.updateSliceInfo();
             console.log('✓ First image displayed');
         } else {
@@ -166,7 +183,19 @@ class DicomViewer {
             
             const image = await cornerstone.loadAndCacheImage(imageId);
             
+            // Actually display the image
             cornerstone.displayImage(this.element, image);
+            
+            // Force immediate render
+            cornerstone.updateImage(this.element);
+            
+            // Check if canvas exists and has content
+            const canvas = this.element.querySelector('canvas');
+            if (canvas) {
+                console.log(`Canvas exists: ${canvas.width}x${canvas.height}`);
+            } else {
+                console.error('❌ No canvas element found!');
+            }
             
             // Set default window/level after first image loads
             if (index === 0) {
@@ -176,10 +205,12 @@ class DicomViewer {
                     if (image.windowCenter && image.windowWidth) {
                         viewport.voi.windowCenter = image.windowCenter;
                         viewport.voi.windowWidth = image.windowWidth;
+                        console.log(`Using image W/L: ${image.windowCenter}/${image.windowWidth}`);
                     } else {
-                        // Fallback to reasonable defaults
+                        // Fallback to reasonable defaults for T2 MRI
                         viewport.voi.windowCenter = 40;
                         viewport.voi.windowWidth = 400;
+                        console.log('Using default W/L: 40/400');
                     }
                     cornerstone.setViewport(this.element, viewport);
                     
