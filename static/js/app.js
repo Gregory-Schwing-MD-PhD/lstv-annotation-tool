@@ -263,16 +263,46 @@ class LSTVAnnotationApp {
         try {
             console.log(`Loading series ${series.series_id} for study ${studyId}...`);
             
-            // Check if slice_count exists
-            if (!series.slice_count || series.slice_count === 0) {
-                throw new Error('Series has no slice_count defined. Please check Firestore data.');
+            // Check if we have a file list in the series
+            if (series.files && Array.isArray(series.files)) {
+                // Use the actual filenames from Firestore
+                const filenames = series.files.map(f => f.filename);
+                console.log(`Using ${filenames.length} filenames from Firestore metadata`);
+                
+                const files = await storageManager.downloadSeries(
+                    studyId,
+                    series.series_id,
+                    filenames,
+                    (current, total) => {
+                        this.showLoadingState(`Loading DICOM files: ${current}/${total}`);
+                    }
+                );
+                
+                if (files.length === 0) {
+                    throw new Error('No DICOM files downloaded. Check Firebase Storage.');
+                }
+                
+                console.log(`Downloaded ${files.length} files, loading into viewer...`);
+                
+                if (dicomViewer) {
+                    await dicomViewer.loadImages(files);
+                    console.log(`✓ Loaded ${files.length} images into viewer`);
+                } else {
+                    throw new Error('DICOM viewer not initialized');
+                }
+                return;
             }
             
-            // Generate filenames (assuming sequential: 001.dcm, 002.dcm, etc.)
+            // Fallback: Check if slice_count exists
+            if (!series.slice_count || series.slice_count === 0) {
+                throw new Error('Series has no slice_count or files list defined. Please check Firestore data.');
+            }
+            
+            // Generate filenames - try both with and without zero padding
             const filenames = [];
             for (let i = 1; i <= series.slice_count; i++) {
-                const filename = String(i).padStart(3, '0') + '.dcm';
-                filenames.push(filename);
+                // Try without zero padding first (matches your actual files: 1.dcm, 2.dcm, etc.)
+                filenames.push(i + '.dcm');
             }
             
             console.log(`Attempting to download ${filenames.length} DICOM files...`);
