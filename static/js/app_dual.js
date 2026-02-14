@@ -5,6 +5,7 @@ class LSTVDualAnnotationApp {
         this.studies = [];
         this.currentStudyIndex = 0;
         this.userProgress = {};
+        this.currentStudy = null;
     }
 
     async init() {
@@ -13,7 +14,7 @@ class LSTVDualAnnotationApp {
             
             // Initialize authentication
             await authManager.init();
-            this.currentUser = authManager.getCurrentUser();
+            this.currentUser = authManager.getUser(); // FIXED: was getCurrentUser()
             
             if (!this.currentUser) {
                 window.location.href = 'login.html';
