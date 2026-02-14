@@ -8,7 +8,7 @@
     <!-- CSS -->
     <link rel="stylesheet" href="static/css/style.css">
     
-    <!-- Firebase SDK -->
+    <!-- Firebase SDK - MUST LOAD FIRST! -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
@@ -181,14 +181,23 @@
         </div>
     </main>
 
-    <!-- Firebase Config -->
+    <!-- 
+    ⚠️ CRITICAL: Scripts must load in this EXACT order!
+    1. Firebase Config (initializes firebase)
+    2. Application modules (auth, storage, viewer, annotations)
+    3. Main app (uses the modules)
+    -->
+    
+    <!-- 1. Firebase Config - MUST BE FIRST -->
     <script src="static/js/config.js"></script>
     
-    <!-- Application Scripts -->
+    <!-- 2. Application Modules - Can load in any order after config -->
     <script src="static/js/auth.js"></script>
     <script src="static/js/storage.js"></script>
     <script src="static/js/viewer.js"></script>
     <script src="static/js/annotations.js"></script>
+    
+    <!-- 3. Main App - MUST BE LAST (depends on all modules) -->
     <script src="static/js/app.js"></script>
 </body>
 </html>
