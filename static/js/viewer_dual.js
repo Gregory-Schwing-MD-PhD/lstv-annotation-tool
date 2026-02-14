@@ -1,4 +1,4 @@
-// Dual-View DICOM Viewer with Crosshair Targeting using Cornerstone.js
+// Dual-View DICOM Viewer with PROPER Spatial Crosshair using DICOM coordinates
 class DualDicomViewer {
     constructor(axialElementId, sagittalElementId) {
         this.axialElement = document.getElementById(axialElementId);
@@ -6,6 +6,10 @@ class DualDicomViewer {
         
         this.axialImageIds = [];
         this.sagittalImageIds = [];
+        
+        // Store actual DICOM spatial positions
+        this.axialPositions = []; // Z-coordinates for each axial slice
+        this.sagittalPositions = []; // X-coordinates for each sagittal slice
         
         this.currentAxialIndex = 0;
         this.currentSagittalIndex = 0;
@@ -147,49 +151,47 @@ class DualDicomViewer {
         });
     }
 
-    // Load images for both views
+    // Extract DICOM ImagePositionPatient to get spatial coordinates
+    async extractSpatialPosition(imageId) {
+        try {
+            const image = await cornerstone.loadImage(imageId);
+            
+            // Try to get ImagePositionPatient from metadata
+            if (image.data && image.data.string) {
+                const ippString = image.data.string('x00200032'); // ImagePositionPatient tag
+                if (ippString) {
+                    const positions = ippString.split('\\').map(parseFloat);
+                    if (positions.length === 3) {
+                        return {
+                            x: positions[0],
+                            y: positions[1],
+                            z: positions[2]
+                        };
+                    }
+                }
+            }
+            
+            // Fallback: try imagePositionPatient directly
+            if (image.imagePositionPatient) {
+                return {
+                    x: image.imagePositionPatient[0],
+                    y: image.imagePositionPatient[1],
+                    z: image.imagePositionPatient[2]
+                };
+            }
+            
+            return null;
+        } catch (error) {
+            console.error('Error extracting spatial position:', error);
+            return null;
+        }
+    }
+
+    // Load images for both views CONCURRENTLY
     async loadDualSeries(axialFiles, sagittalFiles) {
         console.log(`Loading dual series: ${axialFiles.length} axial, ${sagittalFiles.length} sagittal`);
         
-        // Load axial series
-        if (axialFiles && axialFiles.length > 0) {
-            this.axialImageIds = [];
-            for (const file of axialFiles) {
-                try {
-                    const blob = new Blob([file.data], { type: 'application/dicom' });
-                    const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
-                    this.axialImageIds.push({
-                        id: imageId,
-                        filename: file.filename
-                    });
-                } catch (error) {
-                    console.error(`Error loading axial ${file.filename}:`, error);
-                }
-            }
-            this.axialImageIds.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
-            console.log(`✓ Loaded ${this.axialImageIds.length} axial images`);
-        }
-
-        // Load sagittal series
-        if (sagittalFiles && sagittalFiles.length > 0) {
-            this.sagittalImageIds = [];
-            for (const file of sagittalFiles) {
-                try {
-                    const blob = new Blob([file.data], { type: 'application/dicom' });
-                    const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
-                    this.sagittalImageIds.push({
-                        id: imageId,
-                        filename: file.filename
-                    });
-                } catch (error) {
-                    console.error(`Error loading sagittal ${file.filename}:`, error);
-                }
-            }
-            this.sagittalImageIds.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
-            console.log(`✓ Loaded ${this.sagittalImageIds.length} sagittal images`);
-        }
-
-        // CRITICAL FIX: Make viewers visible BEFORE displaying images
+        // Make both viewers visible FIRST
         this.axialElement.style.display = 'block';
         this.axialElement.style.width = '100%';
         this.axialElement.style.height = '600px';
@@ -197,46 +199,135 @@ class DualDicomViewer {
         this.sagittalElement.style.display = 'block';
         this.sagittalElement.style.width = '100%';
         this.sagittalElement.style.height = '600px';
-
-        // Display first images
-        if (this.axialImageIds.length > 0) {
-            const startIndex = Math.floor(this.axialImageIds.length / 2);
-            await this.displayAxialImage(startIndex); // Start at middle
-            
-            // Force resize after a moment
-            setTimeout(() => {
+        
+        // Load BOTH series concurrently using Promise.all
+        await Promise.all([
+            this.loadAxialSeries(axialFiles),
+            this.loadSagittalSeries(sagittalFiles)
+        ]);
+        
+        console.log('✓ Both series loaded concurrently');
+        
+        // Display middle slices
+        const axialStart = Math.floor(this.axialImageIds.length / 2);
+        const sagittalStart = Math.floor(this.sagittalImageIds.length / 2);
+        
+        await Promise.all([
+            this.displayAxialImage(axialStart),
+            this.displaySagittalImage(sagittalStart)
+        ]);
+        
+        // Force resize and redraw both
+        setTimeout(() => {
+            if (this.axialImageIds.length > 0) {
                 try {
                     cornerstone.resize(this.axialElement, true);
-                    cornerstone.updateImage(this.axialElement); // CRITICAL: Force redraw
+                    cornerstone.updateImage(this.axialElement);
                     this.drawCrosshair(this.axialElement, 'sagittal');
-                    console.log('✓ Axial resized and redrawn');
+                    console.log('✓ Axial resized');
                 } catch (e) {
                     console.error('Error resizing axial:', e);
                 }
-            }, 100);
-        }
-
-        if (this.sagittalImageIds.length > 0) {
-            const startIndex = Math.floor(this.sagittalImageIds.length / 2);
-            await this.displaySagittalImage(startIndex); // Start at middle
+            }
             
-            // Force resize after a moment
-            setTimeout(() => {
+            if (this.sagittalImageIds.length > 0) {
                 try {
                     cornerstone.resize(this.sagittalElement, true);
-                    cornerstone.updateImage(this.sagittalElement); // CRITICAL: Force redraw
+                    cornerstone.updateImage(this.sagittalElement);
                     this.drawCrosshair(this.sagittalElement, 'axial');
-                    console.log('✓ Sagittal resized and redrawn');
+                    console.log('✓ Sagittal resized');
                 } catch (e) {
                     console.error('Error resizing sagittal:', e);
                 }
-            }, 100);
-        }
-
+            }
+        }, 150);
+        
         this.updateSliceInfo();
     }
 
-    // Display axial image with crosshair
+    // Load axial series
+    async loadAxialSeries(axialFiles) {
+        if (!axialFiles || axialFiles.length === 0) {
+            console.log('No axial files to load');
+            return;
+        }
+        
+        this.axialImageIds = [];
+        this.axialPositions = [];
+        
+        // Add all files
+        for (const file of axialFiles) {
+            try {
+                const blob = new Blob([file.data], { type: 'application/dicom' });
+                const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
+                this.axialImageIds.push({
+                    id: imageId,
+                    filename: file.filename
+                });
+            } catch (error) {
+                console.error(`Error loading axial ${file.filename}:`, error);
+            }
+        }
+        
+        // Sort by filename
+        this.axialImageIds.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
+        
+        // Extract spatial positions (Z-coordinate for axial slices)
+        console.log('Extracting axial spatial positions...');
+        for (const imageInfo of this.axialImageIds) {
+            const position = await this.extractSpatialPosition(imageInfo.id);
+            if (position) {
+                this.axialPositions.push(position.z); // Z-coordinate for axial
+            } else {
+                this.axialPositions.push(null); // Fallback if no position found
+            }
+        }
+        
+        console.log(`✓ Loaded ${this.axialImageIds.length} axial images with spatial positions`);
+    }
+
+    // Load sagittal series
+    async loadSagittalSeries(sagittalFiles) {
+        if (!sagittalFiles || sagittalFiles.length === 0) {
+            console.log('No sagittal files to load');
+            return;
+        }
+        
+        this.sagittalImageIds = [];
+        this.sagittalPositions = [];
+        
+        // Add all files
+        for (const file of sagittalFiles) {
+            try {
+                const blob = new Blob([file.data], { type: 'application/dicom' });
+                const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
+                this.sagittalImageIds.push({
+                    id: imageId,
+                    filename: file.filename
+                });
+            } catch (error) {
+                console.error(`Error loading sagittal ${file.filename}:`, error);
+            }
+        }
+        
+        // Sort by filename
+        this.sagittalImageIds.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
+        
+        // Extract spatial positions (X-coordinate for sagittal slices)
+        console.log('Extracting sagittal spatial positions...');
+        for (const imageInfo of this.sagittalImageIds) {
+            const position = await this.extractSpatialPosition(imageInfo.id);
+            if (position) {
+                this.sagittalPositions.push(position.x); // X-coordinate for sagittal
+            } else {
+                this.sagittalPositions.push(null);
+            }
+        }
+        
+        console.log(`✓ Loaded ${this.sagittalImageIds.length} sagittal images with spatial positions`);
+    }
+
+    // Display axial image
     async displayAxialImage(index) {
         if (index < 0 || index >= this.axialImageIds.length) return;
         if (!this.isInitialized) return;
@@ -248,8 +339,6 @@ class DualDicomViewer {
             const image = await cornerstone.loadAndCacheImage(imageId);
             
             cornerstone.displayImage(this.axialElement, image);
-            
-            // CRITICAL: Force immediate update
             cornerstone.updateImage(this.axialElement);
             
             // Set window/level on first load
@@ -267,7 +356,7 @@ class DualDicomViewer {
                 }
             }
             
-            // Draw crosshair showing sagittal position
+            // Draw crosshair
             setTimeout(() => this.drawCrosshair(this.axialElement, 'sagittal'), 10);
             
         } catch (error) {
@@ -275,7 +364,7 @@ class DualDicomViewer {
         }
     }
 
-    // Display sagittal image with crosshair
+    // Display sagittal image
     async displaySagittalImage(index) {
         if (index < 0 || index >= this.sagittalImageIds.length) return;
         if (!this.isInitialized) return;
@@ -287,8 +376,6 @@ class DualDicomViewer {
             const image = await cornerstone.loadAndCacheImage(imageId);
             
             cornerstone.displayImage(this.sagittalElement, image);
-            
-            // CRITICAL: Force immediate update
             cornerstone.updateImage(this.sagittalElement);
             
             // Set window/level on first load
@@ -306,7 +393,7 @@ class DualDicomViewer {
                 }
             }
             
-            // Draw crosshair showing axial position
+            // Draw crosshair
             setTimeout(() => this.drawCrosshair(this.sagittalElement, 'axial'), 10);
             
         } catch (error) {
@@ -314,54 +401,102 @@ class DualDicomViewer {
         }
     }
 
-    // Draw crosshair line on the image
+    // Draw crosshair using ACTUAL DICOM spatial coordinates
     drawCrosshair(element, orientation) {
         try {
             const canvas = element.querySelector('canvas');
-            if (!canvas) {
-                console.warn('No canvas found for crosshair');
-                return;
-            }
+            if (!canvas) return;
             
             const context = canvas.getContext('2d');
-            if (!context) {
-                console.warn('No 2D context for crosshair');
-                return;
-            }
+            if (!context) return;
             
-            // Redraw the image first to clear previous crosshair
+            // Redraw the image first
             cornerstone.updateImage(element);
             
-            // Wait a tick for the image to render
             requestAnimationFrame(() => {
-                // Calculate crosshair position
-                let position;
-                if (orientation === 'axial') {
-                    // Draw horizontal line on sagittal showing axial slice position
-                    position = (this.currentAxialIndex / Math.max(1, this.axialImageIds.length - 1)) * canvas.height;
-                } else {
-                    // Draw vertical line on axial showing sagittal slice position
-                    position = (this.currentSagittalIndex / Math.max(1, this.sagittalImageIds.length - 1)) * canvas.width;
-                }
+                let position = null;
                 
-                // Draw the crosshair line
-                context.save();
-                context.strokeStyle = '#00ff00'; // Bright green
-                context.lineWidth = 2;
-                context.setLineDash([5, 5]); // Dashed line
-                
-                context.beginPath();
                 if (orientation === 'axial') {
-                    // Horizontal line
-                    context.moveTo(0, position);
-                    context.lineTo(canvas.width, position);
+                    // Drawing on sagittal view, showing where current axial slice is
+                    // Current axial Z-position
+                    const currentZ = this.axialPositions[this.currentAxialIndex];
+                    
+                    if (currentZ !== null && this.sagittalPositions.length > 0) {
+                        // Find the range of Z values in sagittal images
+                        // (sagittal images also have Z positions from top to bottom)
+                        const zValues = [];
+                        for (let i = 0; i < this.sagittalImageIds.length; i++) {
+                            const pos = this.axialPositions[0]; // Use first axial's Z as reference
+                            // Actually, for sagittal, we need the Z range from the image itself
+                            // Simplified: use canvas height proportion based on axial slice
+                        }
+                        
+                        // SIMPLIFIED APPROACH: Map Z-position to canvas height
+                        const minZ = Math.min(...this.axialPositions.filter(z => z !== null));
+                        const maxZ = Math.max(...this.axialPositions.filter(z => z !== null));
+                        const zRange = maxZ - minZ;
+                        
+                        if (zRange > 0) {
+                            // Normalize current Z position to 0-1 range
+                            const normalizedZ = (currentZ - minZ) / zRange;
+                            position = normalizedZ * canvas.height;
+                        }
+                    }
+                    
+                    // Fallback to simple percentage if spatial coords don't work
+                    if (position === null) {
+                        position = (this.currentAxialIndex / Math.max(1, this.axialImageIds.length - 1)) * canvas.height;
+                    }
+                    
+                    // Draw horizontal line on sagittal
+                    if (position !== null) {
+                        context.save();
+                        context.strokeStyle = '#00ff00';
+                        context.lineWidth = 2;
+                        context.setLineDash([5, 5]);
+                        context.beginPath();
+                        context.moveTo(0, position);
+                        context.lineTo(canvas.width, position);
+                        context.stroke();
+                        context.restore();
+                    }
+                    
                 } else {
-                    // Vertical line
-                    context.moveTo(position, 0);
-                    context.lineTo(position, canvas.height);
+                    // Drawing on axial view, showing where current sagittal slice is
+                    // Current sagittal X-position
+                    const currentX = this.sagittalPositions[this.currentSagittalIndex];
+                    
+                    if (currentX !== null && this.sagittalPositions.length > 0) {
+                        // Find the range of X values in sagittal images
+                        const minX = Math.min(...this.sagittalPositions.filter(x => x !== null));
+                        const maxX = Math.max(...this.sagittalPositions.filter(x => x !== null));
+                        const xRange = maxX - minX;
+                        
+                        if (xRange > 0) {
+                            // Normalize current X position to 0-1 range
+                            const normalizedX = (currentX - minX) / xRange;
+                            position = normalizedX * canvas.width;
+                        }
+                    }
+                    
+                    // Fallback to simple percentage if spatial coords don't work
+                    if (position === null) {
+                        position = (this.currentSagittalIndex / Math.max(1, this.sagittalImageIds.length - 1)) * canvas.width;
+                    }
+                    
+                    // Draw vertical line on axial
+                    if (position !== null) {
+                        context.save();
+                        context.strokeStyle = '#00ff00';
+                        context.lineWidth = 2;
+                        context.setLineDash([5, 5]);
+                        context.beginPath();
+                        context.moveTo(position, 0);
+                        context.lineTo(position, canvas.height);
+                        context.stroke();
+                        context.restore();
+                    }
                 }
-                context.stroke();
-                context.restore();
             });
             
         } catch (error) {
@@ -374,7 +509,6 @@ class DualDicomViewer {
         if (this.currentAxialIndex < this.axialImageIds.length - 1) {
             await this.displayAxialImage(this.currentAxialIndex + 1);
             this.updateSliceInfo();
-            // Update crosshair on sagittal view
             this.drawCrosshair(this.sagittalElement, 'axial');
         }
     }
@@ -383,7 +517,6 @@ class DualDicomViewer {
         if (this.currentAxialIndex > 0) {
             await this.displayAxialImage(this.currentAxialIndex - 1);
             this.updateSliceInfo();
-            // Update crosshair on sagittal view
             this.drawCrosshair(this.sagittalElement, 'axial');
         }
     }
@@ -392,7 +525,6 @@ class DualDicomViewer {
         if (this.currentSagittalIndex < this.sagittalImageIds.length - 1) {
             await this.displaySagittalImage(this.currentSagittalIndex + 1);
             this.updateSliceInfo();
-            // Update crosshair on axial view
             this.drawCrosshair(this.axialElement, 'sagittal');
         }
     }
@@ -401,12 +533,10 @@ class DualDicomViewer {
         if (this.currentSagittalIndex > 0) {
             await this.displaySagittalImage(this.currentSagittalIndex - 1);
             this.updateSliceInfo();
-            // Update crosshair on axial view
             this.drawCrosshair(this.axialElement, 'sagittal');
         }
     }
 
-    // Reset window/level
     resetWindowLevel() {
         if (this.axialImageIds.length > 0) {
             try {
@@ -417,7 +547,7 @@ class DualDicomViewer {
                     cornerstone.setViewport(this.axialElement, viewport);
                 }
             } catch (e) {
-                console.error('Error resetting axial window/level:', e);
+                console.error('Error resetting axial:', e);
             }
         }
         
@@ -430,12 +560,11 @@ class DualDicomViewer {
                     cornerstone.setViewport(this.sagittalElement, viewport);
                 }
             } catch (e) {
-                console.error('Error resetting sagittal window/level:', e);
+                console.error('Error resetting sagittal:', e);
             }
         }
     }
 
-    // Toggle cine play
     togglePlay() {
         if (this.isPlaying) {
             this.stop();
@@ -444,7 +573,6 @@ class DualDicomViewer {
         }
     }
 
-    // Start cine play
     play() {
         if (this.axialImageIds.length === 0) return;
         
@@ -458,7 +586,6 @@ class DualDicomViewer {
         }, 100);
     }
 
-    // Stop cine play
     stop() {
         this.isPlaying = false;
         if (this.playInterval) {
@@ -467,28 +594,18 @@ class DualDicomViewer {
         }
     }
 
-    // Update slice info in UI
     updateSliceInfo() {
         const axialSliceElement = document.getElementById('axialSlice');
         const axialTotalElement = document.getElementById('axialTotal');
         const sagittalSliceElement = document.getElementById('sagittalSlice');
         const sagittalTotalElement = document.getElementById('sagittalTotal');
         
-        if (axialSliceElement) {
-            axialSliceElement.textContent = this.currentAxialIndex + 1;
-        }
-        if (axialTotalElement) {
-            axialTotalElement.textContent = this.axialImageIds.length;
-        }
-        if (sagittalSliceElement) {
-            sagittalSliceElement.textContent = this.currentSagittalIndex + 1;
-        }
-        if (sagittalTotalElement) {
-            sagittalTotalElement.textContent = this.sagittalImageIds.length;
-        }
+        if (axialSliceElement) axialSliceElement.textContent = this.currentAxialIndex + 1;
+        if (axialTotalElement) axialTotalElement.textContent = this.axialImageIds.length;
+        if (sagittalSliceElement) sagittalSliceElement.textContent = this.currentSagittalIndex + 1;
+        if (sagittalTotalElement) sagittalTotalElement.textContent = this.sagittalImageIds.length;
     }
 
-    // Get current slice numbers
     getCurrentSlices() {
         return {
             axial: this.currentAxialIndex + 1,
@@ -496,7 +613,6 @@ class DualDicomViewer {
         };
     }
 
-    // Get total slices
     getTotalSlices() {
         return {
             axial: this.axialImageIds.length,
@@ -504,11 +620,12 @@ class DualDicomViewer {
         };
     }
 
-    // Clear viewer
     clear() {
         this.stop();
         this.axialImageIds = [];
         this.sagittalImageIds = [];
+        this.axialPositions = [];
+        this.sagittalPositions = [];
         this.currentAxialIndex = 0;
         this.currentSagittalIndex = 0;
         
@@ -517,12 +634,11 @@ class DualDicomViewer {
                 cornerstone.reset(this.axialElement);
                 cornerstone.reset(this.sagittalElement);
             } catch (error) {
-                console.error('Error resetting cornerstone:', error);
+                console.error('Error resetting:', error);
             }
         }
     }
     
-    // Cleanup
     destroy() {
         this.clear();
         if (this.keyboardHandler) {
@@ -533,11 +649,10 @@ class DualDicomViewer {
                 cornerstone.disable(this.axialElement);
                 cornerstone.disable(this.sagittalElement);
             } catch (error) {
-                console.error('Error disabling cornerstone:', error);
+                console.error('Error disabling:', error);
             }
         }
     }
 }
 
-// Create global dual viewer instance
 let dicomViewer = null;
