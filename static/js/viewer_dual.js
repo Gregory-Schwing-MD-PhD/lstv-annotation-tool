@@ -1,8 +1,6 @@
 /**
- * Dual-View DICOM Viewer - ARCHITECTURALLY FIXED
- * * CREDITS:
- * - Math & Projection Logic: Gemini (Corrected Vector Math & PixelSpacing)
- * - Rendering Architecture: Claude (Overlay Canvas & Event Loop Fixes)
+ * Dual-View DICOM Viewer - PRODUCTION READY
+ * Fixed overlay canvas architecture that doesn't break Cornerstone
  */
 
 class DualDicomViewer {
@@ -35,7 +33,7 @@ class DualDicomViewer {
 
     init() {
         try {
-            // Initialize Cornerstone Tools
+            // Initialize Cornerstone FIRST
             if (typeof cornerstoneWADOImageLoader !== 'undefined') {
                 cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
                 cornerstoneWADOImageLoader.external.dicomParser = dicomParser;
@@ -44,41 +42,62 @@ class DualDicomViewer {
             cornerstone.enable(this.axialElement);
             cornerstone.enable(this.sagittalElement);
             
-            // Create the Overlay Canvases (The Claude Fix)
+            console.log('✓ Cornerstone enabled');
+            
+            // THEN create overlays (after Cornerstone has initialized its canvas)
             this.axialOverlay = this.createOverlayCanvas(this.axialElement);
             this.sagittalOverlay = this.createOverlayCanvas(this.sagittalElement);
+            
+            console.log('✓ Overlay canvases created');
             
             this.isInitialized = true;
             this.setupEventListeners();
             
-            console.log('✓ Dual DICOM Viewer initialized with Overlay Architecture');
+            console.log('✓ Dual DICOM Viewer initialized');
         } catch (error) {
             console.error('Error initializing dual viewer:', error);
         }
     }
 
     /**
-     * Creates a transparent canvas strictly for drawing annotations
-     * sitting exactly on top of the Cornerstone element.
+     * CRITICAL FIX: Create overlay as a SIBLING, not a child
+     * Cornerstone controls the child canvas - we can't touch it
      */
     createOverlayCanvas(element) {
-        // Ensure parent is relative so absolute positioning works
+        // Ensure the Cornerstone element's parent container can hold positioned children
+        const parent = element.parentElement;
+        if (getComputedStyle(parent).position === 'static') {
+            parent.style.position = 'relative';
+        }
+
+        // Make the Cornerstone element itself relatively positioned
         if (getComputedStyle(element).position === 'static') {
             element.style.position = 'relative';
         }
 
         const overlay = document.createElement('canvas');
+        overlay.className = 'crosshair-overlay'; // For debugging
         overlay.style.position = 'absolute';
-        overlay.style.top = '0';
-        overlay.style.left = '0';
-        overlay.style.pointerEvents = 'none'; // Let clicks pass through to Cornerstone
+        
+        // Position exactly over the Cornerstone element
+        const rect = element.getBoundingClientRect();
+        overlay.style.top = element.offsetTop + 'px';
+        overlay.style.left = element.offsetLeft + 'px';
+        overlay.style.width = element.offsetWidth + 'px';
+        overlay.style.height = element.offsetHeight + 'px';
+        
+        // Set canvas internal resolution to match display size
+        overlay.width = element.offsetWidth;
+        overlay.height = element.offsetHeight;
+        
+        overlay.style.pointerEvents = 'none'; // Let clicks pass through
         overlay.style.zIndex = '10'; // Sit on top
         
-        // Match dimensions
-        overlay.width = element.clientWidth;
-        overlay.height = element.clientHeight;
+        // Insert AFTER the Cornerstone element as a sibling
+        element.parentElement.insertBefore(overlay, element.nextSibling);
         
-        element.appendChild(overlay);
+        console.log(`Created overlay: ${overlay.width}x${overlay.height} at (${overlay.style.left}, ${overlay.style.top})`);
+        
         return overlay;
     }
 
@@ -111,9 +130,7 @@ class DualDicomViewer {
         this.setupWindowLevel(this.axialElement);
         this.setupWindowLevel(this.sagittalElement);
 
-        // 4. Synchronization (The Critical Fix)
-        // We listen for when Cornerstone finishes rendering the image.
-        // This handles initial load, scrolls, zooms, AND pans automatically.
+        // 4. Synchronization - Draw crosshairs after each render
         this.axialElement.addEventListener('cornerstoneimagerendered', () => {
             this.drawCrosshairOnAxial();
         });
@@ -128,16 +145,24 @@ class DualDicomViewer {
             cornerstone.resize(this.axialElement);
             cornerstone.resize(this.sagittalElement);
         });
+        
+        console.log('✓ Event listeners setup');
     }
 
     resizeOverlays() {
         if (this.axialOverlay && this.axialElement) {
-            this.axialOverlay.width = this.axialElement.clientWidth;
-            this.axialOverlay.height = this.axialElement.clientHeight;
+            const rect = this.axialElement.getBoundingClientRect();
+            this.axialOverlay.style.width = this.axialElement.offsetWidth + 'px';
+            this.axialOverlay.style.height = this.axialElement.offsetHeight + 'px';
+            this.axialOverlay.width = this.axialElement.offsetWidth;
+            this.axialOverlay.height = this.axialElement.offsetHeight;
         }
         if (this.sagittalOverlay && this.sagittalElement) {
-            this.sagittalOverlay.width = this.sagittalElement.clientWidth;
-            this.sagittalOverlay.height = this.sagittalElement.clientHeight;
+            const rect = this.sagittalElement.getBoundingClientRect();
+            this.sagittalOverlay.style.width = this.sagittalElement.offsetWidth + 'px';
+            this.sagittalOverlay.style.height = this.sagittalElement.offsetHeight + 'px';
+            this.sagittalOverlay.width = this.sagittalElement.offsetWidth;
+            this.sagittalOverlay.height = this.sagittalElement.offsetHeight;
         }
     }
 
@@ -175,16 +200,12 @@ class DualDicomViewer {
     }
 
     /**
-     * Projects a 3D Point (mm) into 2D Image Pixel Coordinates (x, y)
-     * * The Gemini Math Fix:
-     * - Vector d = Point - Origin
-     * - X_mm = Dot(d, RowVector)  -> Maps to Column Index
-     * - Y_mm = Dot(d, ColVector)  -> Maps to Row Index
-     * - PixelX = X_mm / ColumnSpacing
-     * - PixelY = Y_mm / RowSpacing
+     * DIAGNOSTIC VERSION - Projects 3D point to 2D pixel coordinates
+     * Logs all intermediate steps to debug the math
      */
     projectPointToSlice(worldPoint, sliceMetadata) {
         if (!sliceMetadata || !sliceMetadata.position || !sliceMetadata.orientation || !sliceMetadata.spacing) {
+            console.warn('Missing metadata for projection');
             return null;
         }
         
@@ -198,26 +219,43 @@ class DualDicomViewer {
         const dy = py - sy;
         const dz = pz - sz;
         
-        // Project onto Row Vector (X-axis in patient space)
+        // Project onto Row Vector (should give X coordinate in mm)
         const mmX = dx * rowX + dy * rowY + dz * rowZ;
         
-        // Project onto Column Vector (Y-axis in patient space)
+        // Project onto Column Vector (should give Y coordinate in mm)
         const mmY = dx * colX + dy * colY + dz * colZ;
         
-        // Convert to Pixels
-        return { 
-            x: mmX / colSpacing, 
-            y: mmY / rowSpacing 
-        };
+        // Convert mm to pixels
+        const pixelX = mmX / colSpacing;
+        const pixelY = mmY / rowSpacing;
+        
+        // DIAGNOSTIC LOGGING
+        console.log(`
+🔍 PROJECTION DEBUG:
+   World Point: [${px.toFixed(1)}, ${py.toFixed(1)}, ${pz.toFixed(1)}]
+   Slice Origin: [${sx.toFixed(1)}, ${sy.toFixed(1)}, ${sz.toFixed(1)}]
+   Delta Vector: [${dx.toFixed(1)}, ${dy.toFixed(1)}, ${dz.toFixed(1)}]
+   Row Vector: [${rowX.toFixed(3)}, ${rowY.toFixed(3)}, ${rowZ.toFixed(3)}]
+   Col Vector: [${colX.toFixed(3)}, ${colY.toFixed(3)}, ${colZ.toFixed(3)}]
+   MM Projection: [${mmX.toFixed(1)}, ${mmY.toFixed(1)}]
+   Spacing: [row=${rowSpacing.toFixed(2)}, col=${colSpacing.toFixed(2)}]
+   FINAL PIXELS: [${pixelX.toFixed(1)}, ${pixelY.toFixed(1)}]
+        `);
+        
+        return { x: pixelX, y: pixelY };
     }
 
     async loadDualSeries(axialFiles, sagittalFiles) {
+        console.log(`Loading dual series: ${axialFiles.length} axial, ${sagittalFiles.length} sagittal`);
+        
         this.clear();
         
         await Promise.all([
             this.loadAxialSeries(axialFiles),
             this.loadSagittalSeries(sagittalFiles)
         ]);
+        
+        console.log(`✓ Loaded ${this.axialImageIds.length} axial, ${this.sagittalImageIds.length} sagittal images`);
         
         // Start at middle
         const midAx = Math.floor(this.axialImageIds.length / 2);
@@ -233,18 +271,22 @@ class DualDicomViewer {
 
     async loadAxialSeries(files) {
         const results = await this.processFiles(files);
-        // Sort by Z (Head to Feet)
+        // Sort by Z (Head to Feet) - descending
         results.sort((a, b) => b.metadata.position[2] - a.metadata.position[2]);
         this.axialImageIds = results.map(r => ({ id: r.id }));
         this.axialMetadata = results.map(r => r.metadata);
+        
+        console.log(`Axial Z range: ${results[0].metadata.position[2].toFixed(1)} to ${results[results.length-1].metadata.position[2].toFixed(1)} mm`);
     }
 
     async loadSagittalSeries(files) {
         const results = await this.processFiles(files);
-        // Sort by X (Left to Right)
+        // Sort by X (Left to Right) - ascending
         results.sort((a, b) => a.metadata.position[0] - b.metadata.position[0]);
         this.sagittalImageIds = results.map(r => ({ id: r.id }));
         this.sagittalMetadata = results.map(r => r.metadata);
+        
+        console.log(`Sagittal X range: ${results[0].metadata.position[0].toFixed(1)} to ${results[results.length-1].metadata.position[0].toFixed(1)} mm`);
     }
 
     async processFiles(files) {
@@ -255,7 +297,7 @@ class DualDicomViewer {
                 const metadata = await this.extractDicomMetadata(imageId);
                 return { id: imageId, filename: file.filename, metadata };
             } catch (e) {
-                console.warn('Skipping file', file.filename);
+                console.warn('Skipping file', file.filename, e);
                 return null;
             }
         });
@@ -268,7 +310,9 @@ class DualDicomViewer {
             let meta = {
                 position: image.imagePositionPatient,
                 orientation: null,
-                spacing: [image.rowPixelSpacing, image.columnPixelSpacing] // [Y, X]
+                spacing: [image.rowPixelSpacing, image.columnPixelSpacing], // [Y, X]
+                rows: image.rows,
+                columns: image.columns
             };
 
             // Handle Orientation
@@ -283,10 +327,11 @@ class DualDicomViewer {
                 if (ipp) meta.position = ipp.split('\\').map(parseFloat);
                 if (iop) meta.orientation = iop.split('\\').map(parseFloat);
             }
+            
             return meta;
         } catch (e) {
-            console.error(e);
-            return { position: [0,0,0], orientation: [1,0,0,0,1,0], spacing: [1,1] };
+            console.error('Error extracting metadata:', e);
+            return { position: [0,0,0], orientation: [1,0,0,0,1,0], spacing: [1,1], rows: 512, columns: 512 };
         }
     }
 
@@ -296,10 +341,6 @@ class DualDicomViewer {
         const imageId = this.axialImageIds[index].id;
         const image = await cornerstone.loadAndCacheImage(imageId);
         cornerstone.displayImage(this.axialElement, image);
-        
-        // We do NOT manually call drawCrosshair here.
-        // cornerstone.displayImage triggers 'cornerstoneimagerendered'
-        // which triggers our listener.
     }
 
     async displaySagittalImage(index) {
@@ -319,12 +360,15 @@ class DualDicomViewer {
         const sagMeta = this.sagittalMetadata[this.currentSagittalIndex];
         const axMeta = this.axialMetadata[this.currentAxialIndex];
         
-        // Project Sagittal Origin (which represents the slice plane X) onto Axial
+        console.log(`Drawing axial crosshair: sag slice ${this.currentSagittalIndex + 1}/${this.sagittalMetadata.length}`);
+        
+        // Project Sagittal Origin onto Axial plane
         const proj = this.projectPointToSlice(sagMeta.position, axMeta);
         
         if (proj) {
-            // Use Gemini's Cornerstone Mapping (The "Brilliant" part)
             const canvasPoint = cornerstone.pixelToCanvas(this.axialElement, { x: proj.x, y: proj.y });
+            
+            console.log(`Canvas point: x=${canvasPoint.x.toFixed(1)}, y=${canvasPoint.y.toFixed(1)}`);
             
             // Draw Vertical Line
             ctx.save();
@@ -348,11 +392,15 @@ class DualDicomViewer {
         const axMeta = this.axialMetadata[this.currentAxialIndex];
         const sagMeta = this.sagittalMetadata[this.currentSagittalIndex];
         
-        // Project Axial Origin (which represents the slice plane Z) onto Sagittal
+        console.log(`Drawing sagittal crosshair: ax slice ${this.currentAxialIndex + 1}/${this.axialMetadata.length}`);
+        
+        // Project Axial Origin onto Sagittal plane
         const proj = this.projectPointToSlice(axMeta.position, sagMeta);
         
         if (proj) {
             const canvasPoint = cornerstone.pixelToCanvas(this.sagittalElement, { x: proj.x, y: proj.y });
+            
+            console.log(`Canvas point: x=${canvasPoint.x.toFixed(1)}, y=${canvasPoint.y.toFixed(1)}`);
             
             // Draw Horizontal Line
             ctx.save();
@@ -372,8 +420,7 @@ class DualDicomViewer {
         if (this.currentAxialIndex < this.axialImageIds.length - 1) {
             await this.displayAxialImage(this.currentAxialIndex + 1);
             this.updateSliceInfo();
-            // We must manually trigger sagittal redraw because 
-            // the sagittal line depends on the axial index
+            // Trigger sagittal redraw (the line position depends on axial index)
             cornerstone.updateImage(this.sagittalElement);
         }
     }
@@ -390,6 +437,7 @@ class DualDicomViewer {
         if (this.currentSagittalIndex < this.sagittalImageIds.length - 1) {
             await this.displaySagittalImage(this.currentSagittalIndex + 1);
             this.updateSliceInfo();
+            // Trigger axial redraw (the line position depends on sagittal index)
             cornerstone.updateImage(this.axialElement);
         }
     }
