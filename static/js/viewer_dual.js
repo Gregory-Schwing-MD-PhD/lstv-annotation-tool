@@ -1,42 +1,71 @@
 /**
- * Dual-View DICOM Viewer - NATURAL SIZE VERSION
- * Renders images 1:1 based on DICOM pixel dimensions.
+ * Dual-View DICOM Viewer - CODEC FIXED VERSION
+ * Fixes: "decodeTask is undefined" and Web Worker initialization errors.
  */
 
 class DualDicomViewer {
     constructor(axialElementId, sagittalElementId) {
         this.axialElement = document.getElementById(axialElementId);
         this.sagittalElement = document.getElementById(sagittalElementId);
-        
         this.axialImageIds = [];
         this.sagittalImageIds = [];
         this.axialMetadata = [];   
         this.sagittalMetadata = [];
-        
         this.currentAxialIndex = 0;
         this.currentSagittalIndex = 0;
         this.isInitialized = false;
-        
+
         if (!this.axialElement || !this.sagittalElement) return;
         this.init();
     }
 
-    init() {
+    async init() {
         try {
             if (typeof cornerstoneWADOImageLoader !== 'undefined') {
                 cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
                 cornerstoneWADOImageLoader.external.dicomParser = dicomParser;
-                cornerstoneWADOImageLoader.webWorkerManager.initialize({
-                    maxWebWorkers: navigator.hardwareConcurrency || 4,
-                    startWebWorkersOnDemand: true
-                });
+
+                // CRITICAL FIX: Direct configuration for Web Workers
+                // This prevents the "decodeTask is undefined" error by providing a default config
+                const config = {
+                    webWorkerPath: 'https://unpkg.com/cornerstone-wado-image-loader@4.1.3/dist/cornerstoneWADOImageLoaderWebWorker.bundle.min.js',
+                    taskConfiguration: {
+                        'decodeTask': {
+                            initializeCodecsOnDemand: true,
+                            usePDFJS: false,
+                            strict: false
+                        }
+                    }
+                };
+                
+                // Only initialize if not already running
+                if (!cornerstoneWADOImageLoader.webWorkerManager.isInitialized()) {
+                    cornerstoneWADOImageLoader.webWorkerManager.initialize(config);
+                }
             }
+            
             cornerstone.enable(this.axialElement);
             cornerstone.enable(this.sagittalElement);
             
             this.isInitialized = true;
             this.setupEventListeners();
-        } catch (error) { console.error(error); }
+            console.log('✓ Dual DICOM Viewer initialized (Codecs Configured)');
+        } catch (error) {
+            console.error('Codec Init Error:', error);
+        }
+    }
+
+    // Keep resize logic to handle the "White Screen"
+    resize() {
+        console.log('⚡ Resize Triggered');
+        this.axialElement.style.height = '600px';
+        this.sagittalElement.style.height = '600px';
+        cornerstone.resize(this.axialElement, true);
+        cornerstone.resize(this.sagittalElement, true);
+        if (this.axialImageIds.length) {
+            cornerstone.updateImage(this.axialElement);
+            cornerstone.updateImage(this.sagittalElement);
+        }
     }
 
     setupEventListeners() {
@@ -44,20 +73,23 @@ class DualDicomViewer {
             e.preventDefault();
             e.deltaY < 0 ? this.previousAxialImage() : this.nextAxialImage();
         });
-
         this.sagittalElement.addEventListener('wheel', (e) => {
             e.preventDefault();
             e.deltaY < 0 ? this.previousSagittalImage() : this.nextSagittalImage();
         });
 
+        // Use requestAnimationFrame for clean line rendering
         this.axialElement.addEventListener('cornerstoneimagerendered', () => {
-            const canvas = this.axialElement.querySelector('canvas');
-            if (canvas) this.drawCrosshairOnAxial(canvas.getContext('2d'));
+            requestAnimationFrame(() => {
+                const canvas = this.axialElement.querySelector('canvas');
+                if (canvas) this.drawCrosshairOnAxial(canvas.getContext('2d'));
+            });
         });
-
         this.sagittalElement.addEventListener('cornerstoneimagerendered', () => {
-            const canvas = this.sagittalElement.querySelector('canvas');
-            if (canvas) this.drawCrosshairOnSagittal(canvas.getContext('2d'));
+            requestAnimationFrame(() => {
+                const canvas = this.sagittalElement.querySelector('canvas');
+                if (canvas) this.drawCrosshairOnSagittal(canvas.getContext('2d'));
+            });
         });
 
         window.addEventListener('resize', () => this.resize());
@@ -65,61 +97,62 @@ class DualDicomViewer {
         this.setupWindowLevel(this.sagittalElement);
     }
 
-    /**
-     * NATURAL SIZE LOGIC
-     * Sets the div dimensions to match the image dimensions exactly.
-     */
-    fitContainerToImage(element, image) {
-        element.style.width = image.width + 'px';
-        element.style.height = image.height + 'px';
-        cornerstone.resize(element);
-    }
-
     async displayAxialImage(index) {
         if (index < 0 || index >= this.axialImageIds.length) return;
         this.currentAxialIndex = index;
-        
         try {
             const image = await cornerstone.loadAndCacheImage(this.axialImageIds[index].id);
-            
-            // 1. Force container to match image pixels
-            this.fitContainerToImage(this.axialElement, image);
-            
-            // 2. Display with scale 1.0 (Natural size)
+            this.axialElement.style.width = image.width + 'px';
+            this.axialElement.style.height = image.height + 'px';
             cornerstone.displayImage(this.axialElement, image);
-            const viewport = cornerstone.getViewport(this.axialElement);
-            viewport.scale = 1.0; 
-            viewport.translation.x = 0;
-            viewport.translation.y = 0;
-            cornerstone.setViewport(this.axialElement, viewport);
-
-        } catch (error) { console.error(error); }
+            const vp = cornerstone.getViewport(this.axialElement);
+            vp.scale = 1.0; 
+            cornerstone.setViewport(this.axialElement, vp);
+        } catch (e) { console.error(e); }
     }
 
     async displaySagittalImage(index) {
         if (index < 0 || index >= this.sagittalImageIds.length) return;
         this.currentSagittalIndex = index;
-        
         try {
             const image = await cornerstone.loadAndCacheImage(this.sagittalImageIds[index].id);
-            
-            // 1. Force container to match image pixels
-            this.fitContainerToImage(this.sagittalElement, image);
-            
-            // 2. Display with scale 1.0 (Natural size)
+            this.sagittalElement.style.width = image.width + 'px';
+            this.sagittalElement.style.height = image.height + 'px';
             cornerstone.displayImage(this.sagittalElement, image);
-            const viewport = cornerstone.getViewport(this.sagittalElement);
-            viewport.scale = 1.0;
-            viewport.translation.x = 0;
-            viewport.translation.y = 0;
-            cornerstone.setViewport(this.sagittalElement, viewport);
-
-        } catch (error) { console.error(error); }
+            const vp = cornerstone.getViewport(this.sagittalElement);
+            vp.scale = 1.0;
+            cornerstone.setViewport(this.sagittalElement, vp);
+        } catch (e) { console.error(e); }
     }
 
-    // Reuse the projection math from previous versions
+    drawCrosshairOnAxial(ctx) {
+        if (!this.sagittalMetadata.length || !this.axialMetadata[this.currentAxialIndex]) return;
+        const proj = this.projectPointToSlice(this.sagittalMetadata[this.currentSagittalIndex].position, this.axialMetadata[this.currentAxialIndex]);
+        if (proj) {
+            const canvasPoint = cornerstone.pixelToCanvas(this.axialElement, proj);
+            if (canvasPoint.x >= 0 && canvasPoint.x <= ctx.canvas.width) {
+                ctx.save(); ctx.beginPath(); ctx.strokeStyle = '#00ff00'; ctx.setLineDash([5, 5]);
+                ctx.moveTo(canvasPoint.x, 0); ctx.lineTo(canvasPoint.x, ctx.canvas.height);
+                ctx.stroke(); ctx.restore();
+            }
+        }
+    }
+
+    drawCrosshairOnSagittal(ctx) {
+        if (!this.axialMetadata.length || !this.sagittalMetadata[this.currentSagittalIndex]) return;
+        const proj = this.projectPointToSlice(this.axialMetadata[this.currentAxialIndex].position, this.sagittalMetadata[this.currentSagittalIndex]);
+        if (proj) {
+            const canvasPoint = cornerstone.pixelToCanvas(this.sagittalElement, proj);
+            if (canvasPoint.y >= 0 && canvasPoint.y <= ctx.canvas.height) {
+                ctx.save(); ctx.beginPath(); ctx.strokeStyle = '#00ff00'; ctx.setLineDash([5, 5]);
+                ctx.moveTo(0, canvasPoint.y); ctx.lineTo(ctx.canvas.width, canvasPoint.y);
+                ctx.stroke(); ctx.restore();
+            }
+        }
+    }
+
     projectPointToSlice(worldPoint, sliceMetadata) {
-        if (!sliceMetadata || !sliceMetadata.position || !sliceMetadata.spacing || !sliceMetadata.orientation) return null;
+        if (!sliceMetadata || !sliceMetadata.position || !sliceMetadata.spacing) return null;
         const [px, py, pz] = worldPoint;
         const [sx, sy, sz] = sliceMetadata.position;
         const [rowX, rowY, rowZ, colX, colY, colZ] = sliceMetadata.orientation;
@@ -130,50 +163,13 @@ class DualDicomViewer {
         return { x: mmX / colSpacing, y: mmY / rowSpacing };
     }
 
-    drawCrosshairOnAxial(ctx) {
-        if (!this.sagittalMetadata.length) return;
-        const proj = this.projectPointToSlice(this.sagittalMetadata[this.currentSagittalIndex].position, this.axialMetadata[this.currentAxialIndex]);
-        if (proj) {
-            const canvasPoint = cornerstone.pixelToCanvas(this.axialElement, proj);
-            ctx.save();
-            ctx.beginPath();
-            ctx.strokeStyle = '#00ff00';
-            ctx.setLineDash([5, 5]);
-            ctx.moveTo(canvasPoint.x, 0);
-            ctx.lineTo(canvasPoint.x, ctx.canvas.height);
-            ctx.stroke();
-            ctx.restore();
-        }
-    }
-
-    drawCrosshairOnSagittal(ctx) {
-        if (!this.axialMetadata.length) return;
-        const proj = this.projectPointToSlice(this.axialMetadata[this.currentAxialIndex].position, this.sagittalMetadata[this.currentSagittalIndex]);
-        if (proj) {
-            const canvasPoint = cornerstone.pixelToCanvas(this.sagittalElement, proj);
-            ctx.save();
-            ctx.beginPath();
-            ctx.strokeStyle = '#00ff00';
-            ctx.setLineDash([5, 5]);
-            ctx.moveTo(0, canvasPoint.y);
-            ctx.lineTo(ctx.canvas.width, canvasPoint.y);
-            ctx.stroke();
-            ctx.restore();
-        }
-    }
-
-    resize() {
-        // In Natural mode, we don't fit to window, we just ensure viewport is centered
-        cornerstone.resize(this.axialElement);
-        cornerstone.resize(this.sagittalElement);
-    }
-
     async loadDualSeries(axialFiles, sagittalFiles) {
-        this.axialMetadata = []; this.sagittalMetadata = [];
+        this.clear();
         await Promise.all([this.loadAxialSeries(axialFiles), this.loadSagittalSeries(sagittalFiles)]);
         await this.displayAxialImage(Math.floor(this.axialImageIds.length / 2));
         await this.displaySagittalImage(Math.floor(this.sagittalImageIds.length / 2));
         this.updateSliceInfo();
+        setTimeout(() => this.resize(), 150);
     }
 
     async loadAxialSeries(files) {
@@ -194,15 +190,21 @@ class DualDicomViewer {
         const promises = files.map(async (file) => {
             const blob = new Blob([file.data], { type: 'application/dicom' });
             const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
+            const metadata = await this.extractDicomMetadata(imageId);
+            return { id: imageId, metadata };
+        });
+        return (await Promise.all(promises)).filter(x => x !== null);
+    }
+
+    async extractDicomMetadata(imageId) {
+        try {
             const image = await cornerstone.loadImage(imageId);
-            const metadata = {
+            return {
                 position: image.imagePositionPatient,
                 orientation: [...image.rowCosines, ...image.columnCosines],
                 spacing: [image.rowPixelSpacing, image.columnPixelSpacing]
             };
-            return { id: imageId, metadata };
-        });
-        return Promise.all(promises);
+        } catch (e) { return null; }
     }
 
     setupWindowLevel(element) {
@@ -210,14 +212,16 @@ class DualDicomViewer {
         element.addEventListener('mousedown', (e) => {
             isDragging = true; startX = e.clientX; startY = e.clientY;
             const vp = cornerstone.getViewport(element);
-            startWL = vp.voi.windowCenter; startWW = vp.voi.windowWidth;
+            if (vp) { startWL = vp.voi.windowCenter; startWW = vp.voi.windowWidth; }
         });
         document.addEventListener('mousemove', (e) => {
             if (!isDragging) return;
             const vp = cornerstone.getViewport(element);
-            vp.voi.windowCenter = startWL + (e.clientY - startY);
-            vp.voi.windowWidth = Math.max(1, startWW + (e.clientX - startX));
-            cornerstone.setViewport(element, vp);
+            if (vp) {
+                vp.voi.windowCenter = startWL + (e.clientY - startY);
+                vp.voi.windowWidth = Math.max(1, startWW + (e.clientX - startX));
+                cornerstone.setViewport(element, vp);
+            }
         });
         document.addEventListener('mouseup', () => isDragging = false);
     }
