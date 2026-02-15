@@ -233,17 +233,47 @@ const dicomViewer = {
         const sagittalCtx = this.sagittalCrosshairCanvas.getContext('2d');
         sagittalCtx.clearRect(0, 0, sagittalRect.width, sagittalRect.height);
         
-        const axialRatio = this.axialImageIds.length > 0 
-            ? this.currentAxialIndex / this.axialImageIds.length 
-            : 0.5;
-        const sagittalY = axialRatio * sagittalRect.height;
-        
-        sagittalCtx.strokeStyle = '#00ff00';
-        sagittalCtx.lineWidth = 2;
-        sagittalCtx.beginPath();
-        sagittalCtx.moveTo(0, sagittalY);
-        sagittalCtx.lineTo(sagittalRect.width, sagittalY);
-        sagittalCtx.stroke();
+        // Get the actual viewport to find where the image is displayed
+        try {
+            const viewport = cornerstone.getViewport(this.sagittalElement);
+            const image = cornerstone.getImage(this.sagittalElement);
+            
+            if (image && viewport) {
+                // Calculate the ratio based on axial position
+                const axialRatio = this.axialImageIds.length > 0 
+                    ? this.currentAxialIndex / this.axialImageIds.length 
+                    : 0.5;
+                
+                // Map to image coordinates (0 to image.rows)
+                const imageY = axialRatio * image.rows;
+                
+                // Convert image pixel to canvas coordinates
+                const canvasPoint = cornerstone.pixelToCanvas(this.sagittalElement, { x: image.columns / 2, y: imageY });
+                
+                // Only draw if within visible canvas area
+                if (canvasPoint.y >= 0 && canvasPoint.y <= sagittalRect.height) {
+                    sagittalCtx.strokeStyle = '#00ff00';
+                    sagittalCtx.lineWidth = 2;
+                    sagittalCtx.beginPath();
+                    sagittalCtx.moveTo(0, canvasPoint.y);
+                    sagittalCtx.lineTo(sagittalRect.width, canvasPoint.y);
+                    sagittalCtx.stroke();
+                }
+            }
+        } catch (error) {
+            // Fallback to simple calculation if viewport not available
+            const axialRatio = this.axialImageIds.length > 0 
+                ? this.currentAxialIndex / this.axialImageIds.length 
+                : 0.5;
+            const sagittalY = axialRatio * sagittalRect.height;
+            
+            sagittalCtx.strokeStyle = '#00ff00';
+            sagittalCtx.lineWidth = 2;
+            sagittalCtx.beginPath();
+            sagittalCtx.moveTo(0, sagittalY);
+            sagittalCtx.lineTo(sagittalRect.width, sagittalY);
+            sagittalCtx.stroke();
+        }
     },
 
     // Keyboard controls for navigation
