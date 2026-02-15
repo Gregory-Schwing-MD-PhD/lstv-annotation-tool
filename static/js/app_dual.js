@@ -10,7 +10,6 @@ class LSTVDualAnnotationApp {
         try {
             console.log('Initializing LSTV Dual Annotation Tool...');
             
-            // 1. Auth Init
             await authManager.init();
             this.currentUser = authManager.getUser();
             
@@ -21,18 +20,12 @@ class LSTVDualAnnotationApp {
             
             document.getElementById('userName').textContent = this.currentUser.email;
             
-            // 2. Viewer Init
             dicomViewer = new DualDicomViewer('axialViewer', 'sagittalViewer');
             
-            // 3. Setup Listeners
             this.setupEventListeners();
-            
-            // 4. Load Data
             await this.loadStudies();
             await this.loadUserProgress();
             this.updateStatistics();
-            
-            // 5. Load First Study
             await this.loadNextStudy();
             
         } catch (error) {
@@ -97,14 +90,13 @@ class LSTVDualAnnotationApp {
         this.currentStudy = study;
         document.getElementById('currentStudyId').textContent = study.study_id;
         document.getElementById('loadingMessage').style.display = 'flex';
+        // HIDE container while loading
         document.getElementById('dualViewContainer').style.display = 'none';
 
         try {
-            // Identify Series
             const axSeries = study.series.find(s => s.description.toLowerCase().includes('ax'));
             const sagSeries = study.series.find(s => s.description.toLowerCase().includes('sag'));
             
-            // Fallbacks
             const finalAx = axSeries || study.series[0];
             const finalSag = sagSeries || (study.series[1] || study.series[0]);
 
@@ -114,7 +106,12 @@ class LSTVDualAnnotationApp {
             await dicomViewer.loadDualSeries(axFiles, sagFiles);
 
             document.getElementById('loadingMessage').style.display = 'none';
+            
+            // SHOW container
             document.getElementById('dualViewContainer').style.display = 'grid';
+            
+            // CRITICAL: Force resize now that container is visible (width > 0)
+            dicomViewer.resize();
 
         } catch (error) {
             console.error(error);
@@ -123,19 +120,19 @@ class LSTVDualAnnotationApp {
     }
 
     async fetchFiles(studyId, series) {
-        // Robust filename generation
         let filenames = [];
         if (series.files) {
             filenames = series.files.map(f => f.filename);
         } else if (series.slice_count) {
             filenames = Array.from({length: series.slice_count}, (_, i) => `${i + 1}.dcm`);
         } else {
-            // Default fallback
             filenames = ['1.dcm', '2.dcm', '3.dcm']; 
         }
 
-        return await storageManager.downloadSeries(studyId, series.series_id, filenames, (c, t) => {
-            // Optional progress update
+        // Added Progress Callback
+        return await storageManager.downloadSeries(studyId, series.series_id, filenames, (current, total) => {
+            const msg = document.querySelector('#loadingMessage span');
+            if (msg) msg.textContent = `Downloading ${series.description || 'series'}: ${current}/${total}...`;
         });
     }
 
@@ -151,7 +148,6 @@ class LSTVDualAnnotationApp {
             slices: dicomViewer.getCurrentSlices()
         });
 
-        // Update local progress
         if (!this.userProgress.annotations) this.userProgress.annotations = {};
         this.userProgress.annotations[this.currentStudy.study_id] = true;
         
