@@ -1,20 +1,18 @@
-// Main Application for Dual-View LSTV Annotation
 class LSTVDualAnnotationApp {
     constructor() {
         this.currentUser = null;
         this.studies = [];
-        this.currentStudyIndex = 0;
-        this.userProgress = {};
         this.currentStudy = null;
+        this.userProgress = {};
     }
 
     async init() {
         try {
             console.log('Initializing LSTV Dual Annotation Tool...');
             
-            // Initialize authentication
+            // 1. Auth Init
             await authManager.init();
-            this.currentUser = authManager.getUser(); // FIXED: was getCurrentUser()
+            this.currentUser = authManager.getUser();
             
             if (!this.currentUser) {
                 window.location.href = 'login.html';
@@ -22,370 +20,155 @@ class LSTVDualAnnotationApp {
             }
             
             document.getElementById('userName').textContent = this.currentUser.email;
-            console.log('✓ Authentication initialized');
             
-            // Initialize dual viewer
+            // 2. Viewer Init
             dicomViewer = new DualDicomViewer('axialViewer', 'sagittalViewer');
-            console.log('✓ Dual DICOM viewer initialized');
             
-            // Setup event listeners
+            // 3. Setup Listeners
             this.setupEventListeners();
-            console.log('✓ Event listeners setup');
             
-            // Load studies from Firestore
+            // 4. Load Data
             await this.loadStudies();
-            console.log('✓ Studies loaded');
-            
-            // Load user progress
             await this.loadUserProgress();
-            console.log('✓ User progress loaded');
-            
-            // Update statistics
             this.updateStatistics();
-            console.log('✓ Statistics updated');
             
-            // Load first study
+            // 5. Load First Study
             await this.loadNextStudy();
-            console.log('✓ First study loaded');
             
-            console.log('🎉 Application initialized successfully!');
         } catch (error) {
-            console.error('Error initializing app:', error);
-            alert('Error initializing application. Please refresh the page.');
+            console.error('Initialization Error:', error);
+            alert('Initialization failed. Check console.');
         }
     }
 
     setupEventListeners() {
-        // Sign out
         document.getElementById('signOutBtn').addEventListener('click', async () => {
             await authManager.signOut();
             window.location.href = 'login.html';
         });
 
-        // Submit annotation
-        document.getElementById('annotationForm').addEventListener('submit', async (e) => {
+        document.getElementById('annotationForm').addEventListener('submit', (e) => {
             e.preventDefault();
-            await this.submitAnnotation();
+            this.submitAnnotation();
         });
 
-        // Skip study
-        document.getElementById('skipStudy').addEventListener('click', async () => {
-            await this.skipStudy();
+        document.getElementById('skipStudy').addEventListener('click', () => {
+            this.skipStudy();
         });
 
-        // Reset windowing
         document.getElementById('resetWindowing').addEventListener('click', () => {
-            if (dicomViewer) {
-                dicomViewer.resetWindowLevel();
-            }
+            if (dicomViewer) dicomViewer.resetWindowLevel();
         });
     }
 
     async loadStudies() {
-        try {
-            const studiesSnapshot = await firebase.firestore()
-                .collection('studies')
-                .where('status', '==', 'ready')
-                .get();
-            
-            this.studies = studiesSnapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
-            
-            console.log(`Loaded ${this.studies.length} studies from Firestore`);
-        } catch (error) {
-            console.error('Error loading studies:', error);
-            throw error;
-        }
+        const snap = await firebase.firestore().collection('studies').where('status', '==', 'ready').get();
+        this.studies = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     }
 
     async loadUserProgress() {
-        try {
-            const progressDoc = await firebase.firestore()
-                .collection('user_progress')
-                .doc(this.currentUser.uid)
-                .get();
-            
-            if (progressDoc.exists) {
-                this.userProgress = progressDoc.data();
-                console.log(`User has reviewed ${Object.keys(this.userProgress.annotations || {}).length} studies`);
-            } else {
-                this.userProgress = {
-                    userId: this.currentUser.uid,
-                    email: this.currentUser.email,
-                    annotations: {},
-                    skippedStudies: [],
-                    lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
-                };
-            }
-        } catch (error) {
-            console.error('Error loading user progress:', error);
-        }
+        const doc = await firebase.firestore().collection('user_progress').doc(this.currentUser.uid).get();
+        this.userProgress = doc.exists ? doc.data() : { annotations: {}, skippedStudies: [] };
     }
 
     updateStatistics() {
-        const annotatedCount = Object.keys(this.userProgress.annotations || {}).length;
-        const totalStudies = this.studies.length;
-        const availableStudies = this.studies.filter(s => 
-            !this.userProgress.annotations?.[s.study_id]
-        ).length;
-        
-        document.getElementById('yourReviews').textContent = annotatedCount;
-        document.getElementById('completedStudies').textContent = annotatedCount;
-        document.getElementById('availableStudies').textContent = availableStudies;
-        document.getElementById('totalStudies').textContent = totalStudies;
+        const completed = Object.keys(this.userProgress.annotations || {}).length;
+        const total = this.studies.length;
+        document.getElementById('completedStudies').textContent = completed;
+        document.getElementById('totalStudies').textContent = total;
+        document.getElementById('availableStudies').textContent = total - completed;
     }
 
     async loadNextStudy() {
-        // Find next unannotated study
-        const unannotatedStudy = this.studies.find(study => 
-            !this.userProgress.annotations?.[study.study_id] &&
-            !(this.userProgress.skippedStudies || []).includes(study.study_id)
+        const next = this.studies.find(s => 
+            !this.userProgress.annotations?.[s.study_id] && 
+            !this.userProgress.skippedStudies?.includes(s.study_id)
         );
-        
-        if (!unannotatedStudy) {
-            alert('🎉 All studies completed! Great work!');
+
+        if (!next) {
+            alert('All studies completed!');
             return;
         }
-        
-        await this.loadStudy(unannotatedStudy);
+
+        await this.loadStudy(next);
     }
 
     async loadStudy(study) {
+        this.currentStudy = study;
+        document.getElementById('currentStudyId').textContent = study.study_id;
+        document.getElementById('loadingMessage').style.display = 'flex';
+        document.getElementById('dualViewContainer').style.display = 'none';
+
         try {
-            console.log(`Loading study ${study.study_id}`);
+            // Identify Series
+            const axSeries = study.series.find(s => s.description.toLowerCase().includes('ax'));
+            const sagSeries = study.series.find(s => s.description.toLowerCase().includes('sag'));
             
-            // Find axial and sagittal series
-            const axialSeries = this.findSeriesByOrientation(study, 'axial');
-            const sagittalSeries = this.findSeriesByOrientation(study, 'sagittal');
-            
-            if (!axialSeries && !sagittalSeries) {
-                console.error('No axial or sagittal series found for study');
-                this.showErrorState('No suitable series found. Skipping study...');
-                setTimeout(() => this.skipStudy(), 2000);
-                return;
-            }
-            
-            // Update UI
-            document.getElementById('currentStudyId').textContent = study.study_id;
-            
-            // Show loading state
-            this.showLoadingState('Loading DICOM files...');
-            
-            // Load DICOM files for both series
-            const axialFiles = axialSeries ? await this.loadSeriesFiles(study.study_id, axialSeries) : [];
-            const sagittalFiles = sagittalSeries ? await this.loadSeriesFiles(study.study_id, sagittalSeries) : [];
-            
-            // Load into dual viewer
-            if (dicomViewer) {
-                await dicomViewer.loadDualSeries(axialFiles, sagittalFiles);
-                
-                // Hide loading, show viewer
-                document.getElementById('loadingMessage').style.display = 'none';
-                document.getElementById('dualViewContainer').style.display = 'grid';
-            }
-            
-            // Reset form
-            document.getElementById('annotationForm').reset();
-            
-            this.currentStudy = study;
-            
+            // Fallbacks
+            const finalAx = axSeries || study.series[0];
+            const finalSag = sagSeries || (study.series[1] || study.series[0]);
+
+            const axFiles = await this.fetchFiles(study.study_id, finalAx);
+            const sagFiles = await this.fetchFiles(study.study_id, finalSag);
+
+            await dicomViewer.loadDualSeries(axFiles, sagFiles);
+
+            document.getElementById('loadingMessage').style.display = 'none';
+            document.getElementById('dualViewContainer').style.display = 'grid';
+
         } catch (error) {
-            console.error('Error loading study:', error);
-            this.showErrorState(`Error loading study: ${error.message}`);
+            console.error(error);
+            alert('Failed to load study files.');
         }
     }
 
-    findSeriesByOrientation(study, orientation) {
-        // Try to find series by description keywords
-        const keywords = {
-            'axial': ['ax', 'axial', 't2 ax', 'tra', 'transverse', 'trans'],
-            'sagittal': ['sag', 'sagittal', 't2 sag', 't1 sag']
-        };
-        
-        const searchTerms = keywords[orientation] || [];
-        
-        // Search through series
-        for (const series of study.series) {
-            const desc = (series.description || '').toLowerCase();
-            if (searchTerms.some(term => desc.includes(term))) {
-                return series;
-            }
+    async fetchFiles(studyId, series) {
+        // Robust filename generation
+        let filenames = [];
+        if (series.files) {
+            filenames = series.files.map(f => f.filename);
+        } else if (series.slice_count) {
+            filenames = Array.from({length: series.slice_count}, (_, i) => `${i + 1}.dcm`);
+        } else {
+            // Default fallback
+            filenames = ['1.dcm', '2.dcm', '3.dcm']; 
         }
-        
-        // Fallback: for axial, pick first series; for sagittal, pick second if available
-        if (orientation === 'axial' && study.series.length > 0) {
-            return study.series[0];
-        }
-        if (orientation === 'sagittal' && study.series.length > 1) {
-            return study.series[1];
-        }
-        
-        return null;
-    }
 
-    async loadSeriesFiles(studyId, series) {
-        try {
-            console.log(`Loading series ${series.series_id} for study ${studyId}...`);
-            
-            // Check if we have a file list
-            if (series.files && Array.isArray(series.files)) {
-                const filenames = series.files.map(f => f.filename);
-                console.log(`Using ${filenames.length} filenames from Firestore metadata`);
-                
-                const files = await storageManager.downloadSeries(
-                    studyId,
-                    series.series_id,
-                    filenames,
-                    (current, total) => {
-                        this.showLoadingState(`Loading ${series.description}: ${current}/${total}`);
-                    }
-                );
-                
-                if (files.length === 0) {
-                    throw new Error(`No DICOM files downloaded for series ${series.series_id}`);
-                }
-                
-                console.log(`Downloaded ${files.length} files for ${series.description}`);
-                return files;
-            }
-            
-            // Fallback to slice_count
-            if (!series.slice_count || series.slice_count === 0) {
-                throw new Error('Series has no slice_count or files list defined');
-            }
-            
-            const filenames = [];
-            for (let i = 1; i <= series.slice_count; i++) {
-                filenames.push(i + '.dcm');
-            }
-            
-            console.log(`Attempting to download ${filenames.length} DICOM files...`);
-            
-            const files = await storageManager.downloadSeries(
-                studyId,
-                series.series_id,
-                filenames,
-                (current, total) => {
-                    this.showLoadingState(`Loading ${series.description}: ${current}/${total}`);
-                }
-            );
-            
-            if (files.length === 0) {
-                throw new Error('No DICOM files could be downloaded');
-            }
-            
-            return files;
-            
-        } catch (error) {
-            console.error('Error loading DICOM files:', error);
-            throw error;
-        }
-    }
-
-    showLoadingState(message) {
-        const loadingElement = document.getElementById('loadingMessage');
-        if (loadingElement) {
-            loadingElement.style.display = 'flex';
-            const p = loadingElement.querySelector('p');
-            if (p) p.textContent = message;
-        }
-        
-        const viewerElement = document.getElementById('dualViewContainer');
-        if (viewerElement) {
-            viewerElement.style.display = 'none';
-        }
-    }
-
-    showErrorState(message) {
-        const loadingElement = document.getElementById('loadingMessage');
-        if (loadingElement) {
-            loadingElement.style.display = 'flex';
-            loadingElement.innerHTML = `
-                <div style="text-align: center; color: #ef4444;">
-                    <p style="font-size: 1.2rem; margin-bottom: 1rem;">⚠️ Error</p>
-                    <p>${message}</p>
-                </div>
-            `;
-        }
+        return await storageManager.downloadSeries(studyId, series.series_id, filenames, (c, t) => {
+            // Optional progress update
+        });
     }
 
     async submitAnnotation() {
-        try {
-            const formData = new FormData(document.getElementById('annotationForm'));
-            
-            const annotation = {
-                studyId: this.currentStudy.study_id,
-                castellviType: formData.get('castellvi_type'),
-                confidence: formData.get('confidence'),
-                notes: formData.get('notes') || '',
-                timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-                userId: this.currentUser.uid,
-                email: this.currentUser.email,
-                axialSlice: dicomViewer.getCurrentSlices().axial,
-                sagittalSlice: dicomViewer.getCurrentSlices().sagittal
-            };
-            
-            // Save to Firestore
-            await firebase.firestore()
-                .collection('annotations')
-                .add(annotation);
-            
-            // Update user progress
-            this.userProgress.annotations = this.userProgress.annotations || {};
-            this.userProgress.annotations[this.currentStudy.study_id] = {
-                completed: true,
-                timestamp: new Date().toISOString()
-            };
-            this.userProgress.lastUpdated = firebase.firestore.FieldValue.serverTimestamp();
-            
-            await firebase.firestore()
-                .collection('user_progress')
-                .doc(this.currentUser.uid)
-                .set(this.userProgress, { merge: true });
-            
-            console.log('✓ Annotation saved');
-            
-            // Update statistics
-            this.updateStatistics();
-            
-            // Load next study
-            await this.loadNextStudy();
-            
-        } catch (error) {
-            console.error('Error submitting annotation:', error);
-            alert('Error saving annotation. Please try again.');
-        }
+        const formData = new FormData(document.getElementById('annotationForm'));
+        const data = Object.fromEntries(formData.entries());
+        
+        await firebase.firestore().collection('annotations').add({
+            studyId: this.currentStudy.study_id,
+            userId: this.currentUser.uid,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+            ...data,
+            slices: dicomViewer.getCurrentSlices()
+        });
+
+        // Update local progress
+        if (!this.userProgress.annotations) this.userProgress.annotations = {};
+        this.userProgress.annotations[this.currentStudy.study_id] = true;
+        
+        await firebase.firestore().collection('user_progress').doc(this.currentUser.uid).set(this.userProgress, {merge: true});
+        
+        this.updateStatistics();
+        this.loadNextStudy();
     }
 
     async skipStudy() {
-        try {
-            // Add to skipped list
-            this.userProgress.skippedStudies = this.userProgress.skippedStudies || [];
-            if (!this.userProgress.skippedStudies.includes(this.currentStudy.study_id)) {
-                this.userProgress.skippedStudies.push(this.currentStudy.study_id);
-            }
-            
-            await firebase.firestore()
-                .collection('user_progress')
-                .doc(this.currentUser.uid)
-                .set(this.userProgress, { merge: true });
-            
-            console.log('✓ Study skipped');
-            
-            // Load next study
-            await this.loadNextStudy();
-            
-        } catch (error) {
-            console.error('Error skipping study:', error);
-            alert('Error skipping study. Please try again.');
-        }
+        if (!this.userProgress.skippedStudies) this.userProgress.skippedStudies = [];
+        this.userProgress.skippedStudies.push(this.currentStudy.study_id);
+        
+        await firebase.firestore().collection('user_progress').doc(this.currentUser.uid).set(this.userProgress, {merge: true});
+        this.loadNextStudy();
     }
 }
 
-// Initialize app when DOM is ready
 const app = new LSTVDualAnnotationApp();
-document.addEventListener('DOMContentLoaded', () => {
-    app.init();
-});
+document.addEventListener('DOMContentLoaded', () => app.init());
