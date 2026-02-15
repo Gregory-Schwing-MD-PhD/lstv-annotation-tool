@@ -90,15 +90,15 @@ class LSTVDualAnnotationApp {
         this.currentStudy = study;
         document.getElementById('currentStudyId').textContent = study.study_id;
         
-        // Show Loading, Hide Viewer
+        // Show Loading
         const loadingEl = document.getElementById('loadingMessage');
         loadingEl.style.display = 'flex';
-        // Reset text
-        const span = loadingEl.querySelector('span');
-        if (span) span.textContent = 'Preparing study...';
-        else loadingEl.textContent = 'Preparing study...';
         
-        document.getElementById('dualViewContainer').style.display = 'none';
+        // ⚠️ CRITICAL: Show the container NOW so it has height when JS runs
+        const container = document.getElementById('dualViewContainer');
+        container.style.display = 'grid'; 
+        container.style.visibility = 'visible';
+        container.style.opacity = '1';
 
         try {
             const axSeries = study.series.find(s => s.description.toLowerCase().includes('ax'));
@@ -112,15 +112,9 @@ class LSTVDualAnnotationApp {
 
             await dicomViewer.loadDualSeries(axFiles, sagFiles);
 
-            document.getElementById('loadingMessage').style.display = 'none';
-            document.getElementById('dualViewContainer').style.display = 'grid';
-            
-            // CRITICAL: Force resize now that container is visible
-            if (typeof dicomViewer.resize === 'function') {
-                dicomViewer.resize();
-            } else {
-                console.error("CRITICAL: resize() missing from dicomViewer. Update viewer_dual.js!");
-            }
+            // Hide Loading once pixels are drawn
+            loadingEl.style.display = 'none';
+            dicomViewer.resize();
 
         } catch (error) {
             console.error(error);
