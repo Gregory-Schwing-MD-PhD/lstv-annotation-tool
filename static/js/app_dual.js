@@ -87,15 +87,17 @@ function updateDashboardStats() {
     const user = firebase.auth().currentUser;
     if (!user) return;
 
-    // Count user's completed annotations
-    firebase.firestore()
-        .collection('annotations')
-        .where('userId', '==', user.uid)
-        .get()
-        .then(snapshot => {
-            const yourReviews = snapshot.docs.length;
-            document.getElementById('yourReviews').textContent = yourReviews;
-        });
+    // Count user's completed annotations (only if element exists)
+    const yourReviewsEl = document.getElementById('yourReviews');
+    if (yourReviewsEl) {
+        firebase.firestore()
+            .collection('annotations')
+            .where('userId', '==', user.uid)
+            .get()
+            .then(snapshot => {
+                yourReviewsEl.textContent = snapshot.docs.length;
+            });
+    }
 
     // Total and available stats
     const total = allStudies.length;

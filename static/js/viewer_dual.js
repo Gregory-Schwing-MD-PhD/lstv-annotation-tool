@@ -76,16 +76,39 @@ const dicomViewer = {
     },
 
     // Load both series with automatic crosshair setup
-    async loadDualSeries(axialUrls, sagittalUrls) {
+    async loadDualSeries(axialFiles, sagittalFiles) {
         if (!this.isInitialized) {
             await this.init();
         }
 
-        console.log(`Loading ${axialUrls.length} axial + ${sagittalUrls.length} sagittal images...`);
+        console.log(`Loading ${axialFiles.length} axial + ${sagittalFiles.length} sagittal images...`);
         
-        // Convert Firebase Storage URLs to Cornerstone format
-        this.axialImageIds = axialUrls.map(url => `wadouri:${url}`);
-        this.sagittalImageIds = sagittalUrls.map(url => `wadouri:${url}`);
+        // Convert files to Cornerstone image IDs
+        // Files should be objects with { filename, data } structure from storageManager
+        this.axialImageIds = [];
+        this.sagittalImageIds = [];
+        
+        for (const file of axialFiles) {
+            try {
+                const blob = new Blob([file.data], { type: 'application/dicom' });
+                const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
+                this.axialImageIds.push(imageId);
+            } catch (error) {
+                console.error('Error adding axial file:', file.filename, error);
+            }
+        }
+        
+        for (const file of sagittalFiles) {
+            try {
+                const blob = new Blob([file.data], { type: 'application/dicom' });
+                const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
+                this.sagittalImageIds.push(imageId);
+            } catch (error) {
+                console.error('Error adding sagittal file:', file.filename, error);
+            }
+        }
+
+        console.log(`Created ${this.axialImageIds.length} axial + ${this.sagittalImageIds.length} sagittal image IDs`);
 
         // Load and display first images
         try {
