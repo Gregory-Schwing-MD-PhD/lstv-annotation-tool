@@ -1,9 +1,10 @@
 /**
- * Dual-View DICOM Viewer - ULTIMATE MERGED VERSION
- * Fixes:
- * 1. "resize is not a function" (Added resize method)
- * 2. White Screen (resize triggers redraw)
- * 3. Ghost Lines (Added bounds checking from Claude)
+ * Dual-View DICOM Viewer - DIRECT DRAW ARCHITECTURE
+ * * FIXES:
+ * 1. "White Screen" -> Fixed by adding resize() method.
+ * 2. "No Images" -> Fixed by removing broken Overlay Canvases.
+ * 3. "Infinite Loop" -> Fixed by removing updateImage() from inside draw functions.
+ * 4. "Canvas Context" -> Fixed event handler to properly access canvas context.
  */
 
 class DualDicomViewer {
@@ -20,9 +21,6 @@ class DualDicomViewer {
         this.currentSagittalIndex = 0;
         this.isInitialized = false;
         
-        this.axialOverlay = null;
-        this.sagittalOverlay = null;
-
         if (!this.axialElement || !this.sagittalElement) {
             console.error('Viewer elements not found!');
             return;
@@ -37,96 +35,81 @@ class DualDicomViewer {
                 cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
                 cornerstoneWADOImageLoader.external.dicomParser = dicomParser;
             }
+            
+            // Enable elements (Create the internal canvas)
             cornerstone.enable(this.axialElement);
             cornerstone.enable(this.sagittalElement);
-            
-            // Create overlays (initially 0x0 if hidden, fixed by resize() later)
-            this.axialOverlay = this.createOverlayCanvas(this.axialElement);
-            this.sagittalOverlay = this.createOverlayCanvas(this.sagittalElement);
             
             this.isInitialized = true;
             this.setupEventListeners();
             
-            console.log('✓ Dual DICOM Viewer initialized');
+            console.log('✓ Dual DICOM Viewer initialized (Direct Draw Mode)');
         } catch (error) {
             console.error('Error initializing dual viewer:', error);
         }
     }
 
     /**
-     * [FIX 1] PUBLIC RESIZE METHOD
-     * Required by app_dual.js to fix the White Screen bug
+     * PUBLIC RESIZE METHOD
+     * Required by app_dual.js to fix the 0x0 White Canvas bug
      */
     resize() {
         console.log('⚡ Manual Resize Triggered');
         
-        // 1. Force Cornerstone to fit the new visible container
+        // 1. Tell Cornerstone the container size changed
         cornerstone.resize(this.axialElement, true);
         cornerstone.resize(this.sagittalElement, true);
 
-        // 2. Match Overlay Size to Element Size
-        const sync = (overlay, element) => {
-            if (overlay && element) {
-                overlay.style.width = element.offsetWidth + 'px';
-                overlay.style.height = element.offsetHeight + 'px';
-                overlay.width = element.offsetWidth;
-                overlay.height = element.offsetHeight;
-                overlay.style.top = element.offsetTop + 'px';
-                overlay.style.left = element.offsetLeft + 'px';
-            }
-        };
-        sync(this.axialOverlay, this.axialElement);
-        sync(this.sagittalOverlay, this.sagittalElement);
-
-        // 3. Redraw Images (if loaded) to center them
+        // 2. Force a redraw of the medical images
         if (this.axialImageIds.length) {
             cornerstone.updateImage(this.axialElement);
             cornerstone.updateImage(this.sagittalElement);
         }
     }
 
-    createOverlayCanvas(element) {
-        const parent = element.parentElement;
-        if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
-        if (getComputedStyle(element).position === 'static') element.style.position = 'relative';
-
-        const overlay = document.createElement('canvas');
-        overlay.style.position = 'absolute';
-        overlay.style.top = '0';
-        overlay.style.left = '0';
-        overlay.style.pointerEvents = 'none';
-        overlay.style.zIndex = '10';
-        
-        element.parentElement.insertBefore(overlay, element.nextSibling);
-        return overlay;
-    }
-
     setupEventListeners() {
+        // Scroll Listeners
         this.axialElement.addEventListener('wheel', (e) => {
             e.preventDefault();
             e.deltaY < 0 ? this.previousAxialImage() : this.nextAxialImage();
         });
+
         this.sagittalElement.addEventListener('wheel', (e) => {
             e.preventDefault();
             e.deltaY < 0 ? this.previousSagittalImage() : this.nextSagittalImage();
         });
 
+        // *** FIX: Correct way to access canvas context ***
+        this.axialElement.addEventListener('cornerstoneimagerendered', () => {
+            const canvas = this.axialElement.querySelector('canvas');
+            if (canvas) {
+                const ctx = canvas.getContext('2d');
+                this.drawCrosshairOnAxial(ctx);
+            }
+        });
+
+        this.sagittalElement.addEventListener('cornerstoneimagerendered', () => {
+            const canvas = this.sagittalElement.querySelector('canvas');
+            if (canvas) {
+                const ctx = canvas.getContext('2d');
+                this.drawCrosshairOnSagittal(ctx);
+            }
+        });
+        
+        // Window Resize
+        window.addEventListener('resize', () => this.resize());
+        
+        // Keyboard Support
         document.addEventListener('keydown', (e) => {
             if (this.axialImageIds.length === 0) return;
             if (e.key === 'ArrowUp') this.previousAxialImage();
-            if (e.key === 'ArrowDown') this.nextAxialImage();
-            if (e.key === 'ArrowLeft') this.previousSagittalImage();
-            if (e.key === 'ArrowRight') this.nextSagittalImage();
+            else if (e.key === 'ArrowDown') this.nextAxialImage();
+            else if (e.key === 'ArrowLeft') this.previousSagittalImage();
+            else if (e.key === 'ArrowRight') this.nextSagittalImage();
         });
 
         this.setupWindowLevel(this.axialElement);
         this.setupWindowLevel(this.sagittalElement);
-
-        this.axialElement.addEventListener('cornerstoneimagerendered', () => this.drawCrosshairOnAxial());
-        this.sagittalElement.addEventListener('cornerstoneimagerendered', () => this.drawCrosshairOnSagittal());
-        
-        // Auto-resize on window change
-        window.addEventListener('resize', () => this.resize());
     }
 
     setupWindowLevel(element) {
@@ -160,7 +143,7 @@ class DualDicomViewer {
     }
 
     projectPointToSlice(worldPoint, sliceMetadata) {
-        if (!sliceMetadata || !sliceMetadata.position) return null;
+        if (!sliceMetadata || !sliceMetadata.position || !sliceMetadata.spacing) return null;
         
         const [px, py, pz] = worldPoint;
         const [sx, sy, sz] = sliceMetadata.position;
@@ -179,6 +162,8 @@ class DualDicomViewer {
 
     async loadDualSeries(axialFiles, sagittalFiles) {
         this.clear();
+        console.log(`Loading: ${axialFiles.length} Ax, ${sagittalFiles.length} Sag`);
+        
         await Promise.all([
             this.loadAxialSeries(axialFiles),
             this.loadSagittalSeries(sagittalFiles)
@@ -194,7 +179,7 @@ class DualDicomViewer {
         
         this.updateSliceInfo();
         
-        // Resize check to ensure canvas is correct size
+        // Safety resize shortly after load
         setTimeout(() => this.resize(), 100);
     }
 
@@ -253,6 +238,7 @@ class DualDicomViewer {
         this.currentAxialIndex = index;
         const image = await cornerstone.loadAndCacheImage(this.axialImageIds[index].id);
         cornerstone.displayImage(this.axialElement, image);
+        // NO updateCrosshairs() call here - cornerstone.displayImage triggers the event automatically
     }
 
     async displaySagittalImage(index) {
@@ -262,58 +248,65 @@ class DualDicomViewer {
         cornerstone.displayImage(this.sagittalElement, image);
     }
 
-    drawCrosshairOnAxial() {
-        if (!this.axialOverlay || !this.sagittalMetadata.length) return;
-        const ctx = this.axialOverlay.getContext('2d');
-        ctx.clearRect(0, 0, this.axialOverlay.width, this.axialOverlay.height);
+    /**
+     * DRAW LOGIC: Direct Canvas Access
+     * We receive the canvasContext directly from the event handler
+     */
+    drawCrosshairOnAxial(ctx) {
+        if (!this.sagittalMetadata.length) return;
         
         const sagMeta = this.sagittalMetadata[this.currentSagittalIndex];
         const axMeta = this.axialMetadata[this.currentAxialIndex];
         
+        // Project Sagittal Origin (X-plane) onto Axial
         const proj = this.projectPointToSlice(sagMeta.position, axMeta);
         
         if (proj) {
+            // Map pixel coordinates to canvas coordinates (handles zoom/pan/resize)
             const canvasPoint = cornerstone.pixelToCanvas(this.axialElement, { x: proj.x, y: proj.y });
             
-            // [FIX 2] BOUNDS CHECK (From Claude)
-            // For Axial Crosshair, we care about the VERTICAL line (X position)
-            if (canvasPoint.x >= 0 && canvasPoint.x <= this.axialOverlay.width) {
+            const width = this.axialElement.clientWidth;
+            
+            // Bounds Check: Only draw if X is visible
+            if (canvasPoint.x >= 0 && canvasPoint.x <= width) {
                 ctx.save();
                 ctx.beginPath();
                 ctx.strokeStyle = '#00ff00';
                 ctx.lineWidth = 2;
                 ctx.setLineDash([5, 5]);
+                // Vertical line at calculated X
                 ctx.moveTo(canvasPoint.x, 0);
-                ctx.lineTo(canvasPoint.x, this.axialOverlay.height);
+                ctx.lineTo(canvasPoint.x, this.axialElement.clientHeight);
                 ctx.stroke();
                 ctx.restore();
             }
         }
     }
 
-    drawCrosshairOnSagittal() {
-        if (!this.sagittalOverlay || !this.axialMetadata.length) return;
-        const ctx = this.sagittalOverlay.getContext('2d');
-        ctx.clearRect(0, 0, this.sagittalOverlay.width, this.sagittalOverlay.height);
+    drawCrosshairOnSagittal(ctx) {
+        if (!this.axialMetadata.length) return;
         
         const axMeta = this.axialMetadata[this.currentAxialIndex];
         const sagMeta = this.sagittalMetadata[this.currentSagittalIndex];
         
+        // Project Axial Origin (Z-plane) onto Sagittal
         const proj = this.projectPointToSlice(axMeta.position, sagMeta);
         
         if (proj) {
             const canvasPoint = cornerstone.pixelToCanvas(this.sagittalElement, { x: proj.x, y: proj.y });
             
-            // [FIX 2] BOUNDS CHECK (From Claude)
-            // For Sagittal Crosshair, we care about the HORIZONTAL line (Y position)
-            if (canvasPoint.y >= 0 && canvasPoint.y <= this.sagittalOverlay.height) {
+            const height = this.sagittalElement.clientHeight;
+            
+            // Bounds Check: Only draw if Y is visible
+            if (canvasPoint.y >= 0 && canvasPoint.y <= height) {
                 ctx.save();
                 ctx.beginPath();
                 ctx.strokeStyle = '#00ff00';
                 ctx.lineWidth = 2;
                 ctx.setLineDash([5, 5]);
+                // Horizontal line at calculated Y
                 ctx.moveTo(0, canvasPoint.y);
-                ctx.lineTo(this.sagittalOverlay.width, canvasPoint.y);
+                ctx.lineTo(this.sagittalElement.clientWidth, canvasPoint.y);
                 ctx.stroke();
                 ctx.restore();
             }
@@ -324,6 +317,7 @@ class DualDicomViewer {
         if (this.currentAxialIndex < this.axialImageIds.length - 1) {
             await this.displayAxialImage(this.currentAxialIndex + 1);
             this.updateSliceInfo();
+            // Trigger sagittal update (to move its crosshair)
             cornerstone.updateImage(this.sagittalElement);
         }
     }
@@ -340,6 +334,7 @@ class DualDicomViewer {
         if (this.currentSagittalIndex < this.sagittalImageIds.length - 1) {
             await this.displaySagittalImage(this.currentSagittalIndex + 1);
             this.updateSliceInfo();
+            // Trigger axial update (to move its crosshair)
             cornerstone.updateImage(this.axialElement);
         }
     }
@@ -378,13 +373,11 @@ class DualDicomViewer {
         this.currentAxialIndex = 0;
         this.currentSagittalIndex = 0;
         
-        if (this.axialOverlay) {
-            const ctx = this.axialOverlay.getContext('2d');
-            ctx.clearRect(0, 0, this.axialOverlay.width, this.axialOverlay.height);
-        }
-        if (this.sagittalOverlay) {
-            const ctx = this.sagittalOverlay.getContext('2d');
-            ctx.clearRect(0, 0, this.sagittalOverlay.width, this.sagittalOverlay.height);
+        if (this.isInitialized) {
+            try {
+                cornerstone.reset(this.axialElement);
+                cornerstone.reset(this.sagittalElement);
+            } catch (error) {}
         }
     }
 }
