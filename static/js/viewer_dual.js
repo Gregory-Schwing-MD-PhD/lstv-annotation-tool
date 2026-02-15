@@ -206,7 +206,7 @@ const dicomViewer = {
     updateCrosshairs() {
         if (!this.axialCrosshairCanvas || !this.sagittalCrosshairCanvas) return;
 
-        // Axial crosshair (horizontal line showing sagittal position)
+        // Axial crosshair (VERTICAL line showing sagittal position)
         const axialRect = this.axialElement.getBoundingClientRect();
         this.axialCrosshairCanvas.width = axialRect.width;
         this.axialCrosshairCanvas.height = axialRect.height;
@@ -217,16 +217,16 @@ const dicomViewer = {
         const sagittalRatio = this.sagittalImageIds.length > 0 
             ? this.currentSagittalIndex / this.sagittalImageIds.length 
             : 0.5;
-        const axialY = sagittalRatio * axialRect.height;
+        const axialX = sagittalRatio * axialRect.width;
         
         axialCtx.strokeStyle = '#00ff00';
         axialCtx.lineWidth = 2;
         axialCtx.beginPath();
-        axialCtx.moveTo(0, axialY);
-        axialCtx.lineTo(axialRect.width, axialY);
+        axialCtx.moveTo(axialX, 0);
+        axialCtx.lineTo(axialX, axialRect.height);
         axialCtx.stroke();
 
-        // Sagittal crosshair (vertical line showing axial position)
+        // Sagittal crosshair (HORIZONTAL line showing axial position)
         const sagittalRect = this.sagittalElement.getBoundingClientRect();
         this.sagittalCrosshairCanvas.width = sagittalRect.width;
         this.sagittalCrosshairCanvas.height = sagittalRect.height;
@@ -236,13 +236,13 @@ const dicomViewer = {
         const axialRatio = this.axialImageIds.length > 0 
             ? this.currentAxialIndex / this.axialImageIds.length 
             : 0.5;
-        const sagittalX = sagittalRect.width * (1 - axialRatio); // Inverted for typical sagittal orientation
+        const sagittalY = axialRatio * sagittalRect.height;
         
         sagittalCtx.strokeStyle = '#00ff00';
         sagittalCtx.lineWidth = 2;
         sagittalCtx.beginPath();
-        sagittalCtx.moveTo(sagittalX, 0);
-        sagittalCtx.lineTo(sagittalX, sagittalRect.height);
+        sagittalCtx.moveTo(0, sagittalY);
+        sagittalCtx.lineTo(sagittalRect.width, sagittalY);
         sagittalCtx.stroke();
     },
 
