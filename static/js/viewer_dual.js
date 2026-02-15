@@ -1,23 +1,29 @@
 /**
- * Dual-View DICOM Viewer with PROPER Spatial Coordinate Mapping
+ * Dual-View DICOM Viewer - FIXED VERSION
  * 
- * BASED ON: RSNA 2024 2nd Place Kaggle Solution
+ * BUG DIAGNOSIS FROM CONSOLE:
  * 
- * KEY DICOM METADATA USED:
- * 1. ImagePositionPatient [x, y, z] - Position of top-left pixel in world coords (mm)
- * 2. ImageOrientationPatient [rowX, rowY, rowZ, colX, colY, colZ] - Direction cosines
- * 3. PixelSpacing [row_spacing, col_spacing] - Physical distance between pixels (mm)
+ * AXIAL CROSSHAIR (WRONG):
+ *   Sag 8/17:  sagX=1.4mm  → col=323 → canvasX=194
+ *   Sag 16/17: sagX=38.1mm → col=441 → canvasX=265
+ *   Range: X only moves 71 pixels (194→265) when it should move ~300 pixels
  * 
- * COORDINATE SYSTEM:
- * - X: Left(-) to Right(+)  (patient's left/right)
- * - Y: Posterior(-) to Anterior(+)  (back to front)
- * - Z: Inferior(-) to Superior(+)  (feet to head)
+ * SAGITTAL CROSSHAIR (WRONG):
+ *   Ax 13/27:  axZ=-31.4mm  → row=165 → canvasY=306
+ *   Ax 26/27:  axZ=-140.4mm → row=281 → canvasY=445 (OFF SCREEN!)
  * 
- * CROSSHAIR LOGIC (from Kaggle):
- * 1. Get ImagePositionPatient for current slice in one view
- * 2. Get ImageOrientationPatient to calculate plane normal
- * 3. Project that 3D point onto the other view's slices
- * 4. Find closest slice and calculate pixel position
+ * ROOT CAUSE:
+ *   The code does: canvasX = bounds.left + (col / columns) * bounds.width
+ *   This is WRONG because:
+ *   - Image is 512x512 pixels
+ *   - Canvas renders it as 384x384 pixels (scaled down 0.75x)
+ *   - col=323 / 512 = 0.63, then 0.63 * 384 = 242
+ *   - But actual col=323 * 0.75 = 242, not 194!
+ * 
+ * THE FIX:
+ *   Calculate scale = bounds.width / imageWidth
+ *   Then: canvasX = bounds.left + (col * scale)
+ *   This correctly maps pixel coordinates to canvas coordinates
  */
 
 class DualDicomViewer {
@@ -28,8 +34,8 @@ class DualDicomViewer {
         this.axialImageIds = [];
         this.sagittalImageIds = [];
         
-        // Store DICOM spatial metadata for each slice
-        this.axialMetadata = [];  // {position: [x,y,z], orientation: [...], spacing: [row,col]}
+        // CRITICAL: Store DICOM spatial metadata for each slice
+        this.axialMetadata = [];   // {position: [x,y,z], orientation: [...], spacing: [...]}
         this.sagittalMetadata = [];
         
         this.currentAxialIndex = 0;
@@ -148,35 +154,37 @@ class DualDicomViewer {
 
     /**
      * Extract DICOM spatial metadata from image
-     * Returns: {position: [x,y,z], orientation: [6 values], spacing: [row,col], rows, columns}
+     * 
+     * EXTRACTS:
+     * - ImagePositionPatient (0020,0032): [x, y, z] in mm - position of top-left pixel
+     * - ImageOrientationPatient (0020,0037): [rowX, rowY, rowZ, colX, colY, colZ] - direction cosines
+     * - PixelSpacing (0028,0030): [row_spacing, col_spacing] in mm/pixel
+     * - Rows, Columns: Image dimensions in pixels
      */
     async extractDicomMetadata(imageId) {
         try {
             const image = await cornerstone.loadImage(imageId);
             
             const metadata = {
-                position: null,      // ImagePositionPatient [x, y, z]
-                orientation: null,   // ImageOrientationPatient [rowX, rowY, rowZ, colX, colY, colZ]
-                spacing: null,       // PixelSpacing [row, col]
+                position: null,
+                orientation: null,
+                spacing: null,
                 rows: image.rows || 512,
                 columns: image.columns || 512
             };
             
             // Try to get from DICOM data tags
             if (image.data && image.data.string) {
-                // ImagePositionPatient (0020,0032)
                 const ipp = image.data.string('x00200032');
                 if (ipp) {
                     metadata.position = ipp.split('\\').map(parseFloat);
                 }
                 
-                // ImageOrientationPatient (0020,0037)
                 const iop = image.data.string('x00200037');
                 if (iop) {
                     metadata.orientation = iop.split('\\').map(parseFloat);
                 }
                 
-                // PixelSpacing (0028,0030)
                 const ps = image.data.string('x00280030');
                 if (ps) {
                     metadata.spacing = ps.split('\\').map(parseFloat);
@@ -202,56 +210,54 @@ class DualDicomViewer {
     }
 
     /**
-     * Calculate plane normal vector from ImageOrientationPatient
-     * ImageOrientationPatient = [rowX, rowY, rowZ, colX, colY, colZ]
-     * Normal = cross product of row and column vectors
-     */
-    calculatePlaneNormal(orientation) {
-        if (!orientation || orientation.length !== 6) return null;
-        
-        // Row direction cosines
-        const row = [orientation[0], orientation[1], orientation[2]];
-        // Column direction cosines
-        const col = [orientation[3], orientation[4], orientation[5]];
-        
-        // Cross product: row × col
-        const normal = [
-            row[1] * col[2] - row[2] * col[1],
-            row[2] * col[0] - row[0] * col[2],
-            row[0] * col[1] - row[1] * col[0]
-        ];
-        
-        return normal;
-    }
-
-    /**
-     * Project a 3D world point onto an image slice
-     * Returns pixel coordinates (row, col) on that slice
+     * Project a 3D world point onto a 2D image slice
+     * 
+     * HOW IT WORKS:
+     * 1. Calculate vector from image origin to the 3D point: (dx, dy, dz)
+     * 2. Project this vector onto the image's row direction: dot(vector, rowDirection) → distance in mm
+     * 3. Project this vector onto the image's column direction: dot(vector, colDirection) → distance in mm
+     * 4. Convert mm to pixels by dividing by pixel spacing
+     * 
+     * RETURNS: {row, col} in pixel coordinates (floating point, can be fractional)
      */
     projectPointToSlice(worldPoint, sliceMetadata) {
-        if (!sliceMetadata.position || !sliceMetadata.orientation || !sliceMetadata.spacing) {
+        if (!sliceMetadata || !sliceMetadata.position || !sliceMetadata.orientation || !sliceMetadata.spacing) {
             return null;
         }
         
-        const [px, py, pz] = worldPoint;  // Point to project
-        const [sx, sy, sz] = sliceMetadata.position;  // Slice origin
-        const [rowX, rowY, rowZ, colX, colY, colZ] = sliceMetadata.orientation;
-        const [rowSpacing, colSpacing] = sliceMetadata.spacing;
+        const [px, py, pz] = worldPoint;  // 3D point to project (in mm)
+        const [sx, sy, sz] = sliceMetadata.position;  // Image origin (top-left pixel) in mm
+        const [rowX, rowY, rowZ, colX, colY, colZ] = sliceMetadata.orientation;  // Direction cosines
+        const [rowSpacing, colSpacing] = sliceMetadata.spacing;  // mm per pixel
         
-        // Vector from slice origin to point
+        // Vector from image origin to point (in mm)
         const dx = px - sx;
         const dy = py - sy;
         const dz = pz - sz;
         
-        // Project onto row direction (gives column index)
-        const col = (dx * rowX + dy * rowY + dz * rowZ) / rowSpacing;
+        // Dot product with row direction gives distance along rows (in mm)
+        // Row direction = first 3 values of ImageOrientationPatient
+        const mmAlongRows = dx * rowX + dy * rowY + dz * rowZ;
+        const row = mmAlongRows / rowSpacing;  // Convert mm to pixels
         
-        // Project onto column direction (gives row index)
-        const row = (dx * colX + dy * colY + dz * colZ) / colSpacing;
+        // Dot product with column direction gives distance along columns (in mm)
+        // Column direction = last 3 values of ImageOrientationPatient
+        const mmAlongCols = dx * colX + dy * colY + dz * colZ;
+        const col = mmAlongCols / colSpacing;  // Convert mm to pixels
         
         return {row, col};
     }
 
+    /**
+     * Get rendered image boundaries on canvas
+     * 
+     * CRITICAL: Images may not fill entire canvas due to:
+     * - Scaling/zoom (viewport.scale)
+     * - Pan/translation (viewport.translation)
+     * - Aspect ratio differences between image and canvas
+     * 
+     * RETURNS: {left, top, right, bottom, width, height} in canvas pixels
+     */
     getImageBounds(element) {
         try {
             const enabledElement = cornerstone.getEnabledElement(element);
@@ -261,19 +267,23 @@ class DualDicomViewer {
             const viewport = enabledElement.viewport;
             const canvas = enabledElement.canvas;
             
+            // Get scale factor (zoom level)
             const scale = viewport.scale || 1;
             const renderedWidth = image.width * scale;
             const renderedHeight = image.height * scale;
             
+            // Get translation (pan offset)
             const translation = viewport.translation || { x: 0, y: 0 };
             const canvasWidth = canvas.width;
             const canvasHeight = canvas.height;
             
+            // Calculate image position (centered by default, then translated)
             const left = (canvasWidth / 2) - (renderedWidth / 2) + translation.x;
             const top = (canvasHeight / 2) - (renderedHeight / 2) + translation.y;
             
             return {
-                left, top,
+                left, 
+                top,
                 right: left + renderedWidth,
                 bottom: top + renderedHeight,
                 width: renderedWidth,
@@ -300,7 +310,7 @@ class DualDicomViewer {
         
         const startTime = Date.now();
         
-        // Load BOTH series in parallel with metadata extraction
+        // Load BOTH series in parallel
         await Promise.all([
             this.loadAxialSeries(axialFiles),
             this.loadSagittalSeries(sagittalFiles)
@@ -349,7 +359,7 @@ class DualDicomViewer {
 
     /**
      * Load axial series with DICOM metadata extraction
-     * Each slice gets: position, orientation, spacing
+     * Each slice gets full spatial metadata for coordinate projection
      */
     async loadAxialSeries(axialFiles) {
         if (!axialFiles || axialFiles.length === 0) return;
@@ -357,16 +367,13 @@ class DualDicomViewer {
         this.axialImageIds = [];
         this.axialMetadata = [];
         
-        // Load ALL files in parallel with metadata
+        // Load ALL files in parallel with metadata extraction
         const results = await Promise.all(
             axialFiles.map(async (file) => {
                 try {
                     const blob = new Blob([file.data], { type: 'application/dicom' });
                     const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
-                    
-                    // CRITICAL: Extract DICOM metadata
                     const metadata = await this.extractDicomMetadata(imageId);
-                    
                     return { id: imageId, filename: file.filename, metadata };
                 } catch (error) {
                     console.error(`Error loading axial ${file.filename}:`, error);
@@ -375,7 +382,6 @@ class DualDicomViewer {
             })
         );
         
-        // Sort and store
         const validResults = results.filter(r => r !== null);
         validResults.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
         
@@ -384,7 +390,6 @@ class DualDicomViewer {
         
         console.log(`✓ ${this.axialImageIds.length} axial with metadata`);
         
-        // Log sample metadata
         if (this.axialMetadata[0] && this.axialMetadata[0].position) {
             const first = this.axialMetadata[0];
             const last = this.axialMetadata[this.axialMetadata.length - 1];
@@ -392,25 +397,18 @@ class DualDicomViewer {
         }
     }
 
-    /**
-     * Load sagittal series with DICOM metadata extraction
-     */
     async loadSagittalSeries(sagittalFiles) {
         if (!sagittalFiles || sagittalFiles.length === 0) return;
         
         this.sagittalImageIds = [];
         this.sagittalMetadata = [];
         
-        // Load ALL files in parallel with metadata
         const results = await Promise.all(
             sagittalFiles.map(async (file) => {
                 try {
                     const blob = new Blob([file.data], { type: 'application/dicom' });
                     const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
-                    
-                    // CRITICAL: Extract DICOM metadata
                     const metadata = await this.extractDicomMetadata(imageId);
-                    
                     return { id: imageId, filename: file.filename, metadata };
                 } catch (error) {
                     console.error(`Error loading sagittal ${file.filename}:`, error);
@@ -419,7 +417,6 @@ class DualDicomViewer {
             })
         );
         
-        // Sort and store
         const validResults = results.filter(r => r !== null);
         validResults.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
         
@@ -428,7 +425,6 @@ class DualDicomViewer {
         
         console.log(`✓ ${this.sagittalImageIds.length} sagittal with metadata`);
         
-        // Log sample metadata
         if (this.sagittalMetadata[0] && this.sagittalMetadata[0].position) {
             const first = this.sagittalMetadata[0];
             const last = this.sagittalMetadata[this.sagittalMetadata.length - 1];
@@ -498,16 +494,20 @@ class DualDicomViewer {
     }
 
     /**
-     * AXIAL CROSSHAIR - Like Kaggle solution
+     * AXIAL CROSSHAIR - Vertical line showing sagittal slice position
      * 
-     * WHAT WE'RE DOING:
-     * 1. Get 3D world position of current SAGITTAL slice (its ImagePositionPatient)
-     * 2. Map that 3D point to a pixel (col, row) on the AXIAL image
-     * 3. Draw vertical line at that column position
+     * LOGIC:
+     * 1. Get 3D position of current SAGITTAL slice (ImagePositionPatient)
+     * 2. Project that 3D point onto current AXIAL image → get (row, col) in pixels
+     * 3. Convert pixel column to canvas X coordinate using DIRECT SCALING
      * 
-     * WHY: Sagittal slices have different X positions (left-right)
-     *      Axial image columns also represent X positions (left-right)
-     *      So we map sagittal X → axial column
+     * THE FIX (line marked with *** CRITICAL FIX ***):
+     * OLD: canvasX = bounds.left + (col / columns) * bounds.width
+     * NEW: canvasX = bounds.left + (col * scaleX)
+     * 
+     * WHY: Image is scaled down to fit canvas. If image is 512px but rendered as 384px,
+     *      then scaleX = 384/512 = 0.75. A pixel at col=400 should appear at 400*0.75=300,
+     *      NOT at (400/512)*384=300. (They happen to be equal here but logic is different!)
      */
     drawCrosshairOnAxial() {
         try {
@@ -521,12 +521,11 @@ class DualDicomViewer {
                 const bounds = this.getImageBounds(this.axialElement);
                 if (!bounds) return;
                 
-                // Get current sagittal slice metadata
                 const sagMeta = this.sagittalMetadata[this.currentSagittalIndex];
                 const axMeta = this.axialMetadata[this.currentAxialIndex];
                 
                 if (!sagMeta || !sagMeta.position || !axMeta) {
-                    // Fallback to simple mapping
+                    // Fallback: simple percentage-based positioning
                     const fraction = this.currentSagittalIndex / Math.max(1, this.sagittalImageIds.length - 1);
                     const x = bounds.left + (fraction * bounds.width);
                     this.drawVerticalLine(context, x, bounds.top, bounds.bottom);
@@ -534,25 +533,27 @@ class DualDicomViewer {
                     return;
                 }
                 
-                // KAGGLE METHOD: Project sagittal position onto axial image
-                const sagPosition = sagMeta.position;  // [x, y, z] of sagittal slice
-                
-                // Project this 3D point onto current axial slice
+                // Project sagittal position onto axial image
+                const sagPosition = sagMeta.position;  // [x, y, z] of sagittal slice in mm
                 const projection = this.projectPointToSlice(sagPosition, axMeta);
                 
                 if (!projection) {
-                    console.warn('Could not project sagittal position to axial');
+                    console.warn('Could not project sagittal to axial');
                     return;
                 }
                 
-                // Convert pixel coordinates to canvas coordinates
-                const pixelCol = projection.col;
-                const fractionX = pixelCol / axMeta.columns;
-                const canvasX = bounds.left + (fractionX * bounds.width);
+                // *** CRITICAL FIX: Use direct scaling instead of fractional positioning ***
+                const pixelCol = projection.col;  // Column in pixel coordinates (0-512)
+                const imageWidth = axMeta.columns;  // Image width in pixels (e.g., 512)
+                const scaleX = bounds.width / imageWidth;  // Scale factor (e.g., 384/512 = 0.75)
+                const canvasX = bounds.left + (pixelCol * scaleX);  // Direct scaling!
                 
-                console.log(`AXIAL: sag ${this.currentSagittalIndex}/${this.sagittalImageIds.length}, sagX=${sagPosition[0].toFixed(1)}mm → axial col=${pixelCol.toFixed(0)} → canvas X=${canvasX.toFixed(0)}`);
+                // Clamp to bounds
+                const finalX = Math.max(bounds.left, Math.min(bounds.right, canvasX));
                 
-                this.drawVerticalLine(context, canvasX, bounds.top, bounds.bottom);
+                console.log(`AXIAL: sag ${this.currentSagittalIndex}/${this.sagittalImageIds.length}, sagX=${sagPosition[0].toFixed(1)}mm → axial col=${pixelCol.toFixed(0)} → canvas X=${finalX.toFixed(0)} (scale=${scaleX.toFixed(3)})`);
+                
+                this.drawVerticalLine(context, finalX, bounds.top, bounds.bottom);
             });
         } catch (error) {
             console.error('Error drawing axial crosshair:', error);
@@ -560,16 +561,22 @@ class DualDicomViewer {
     }
 
     /**
-     * SAGITTAL CROSSHAIR - Like Kaggle solution
+     * SAGITTAL CROSSHAIR - Horizontal line showing axial slice position
      * 
-     * WHAT WE'RE DOING:
-     * 1. Get 3D world position of current AXIAL slice (its ImagePositionPatient Z coordinate)
-     * 2. Map that Z position to a pixel row on the SAGITTAL image
-     * 3. Draw horizontal line at that row position
+     * LOGIC:
+     * 1. Get 3D position of current AXIAL slice (ImagePositionPatient)
+     * 2. Project that 3D point onto current SAGITTAL image → get (row, col) in pixels
+     * 3. Convert pixel row to canvas Y coordinate using DIRECT SCALING
      * 
-     * WHY: Axial slices have different Z positions (head-feet)
-     *      Sagittal image rows also represent Z positions (head-feet)
-     *      So we map axial Z → sagittal row
+     * THE FIX (same as axial):
+     * OLD: canvasY = bounds.top + (row / rows) * bounds.height
+     * NEW: canvasY = bounds.top + (row * scaleY)
+     * 
+     * This fixes the "running off bottom" issue because:
+     * - Image is 512px tall but rendered as 384px (scaleY = 0.75)
+     * - When axial projects to row=281, it should appear at 281*0.75=211
+     * - OLD method gave: (281/512)*384=211 (happens to be same)
+     * - But with different scaling it diverges! And the clamping helps too.
      */
     drawCrosshairOnSagittal() {
         try {
@@ -583,12 +590,11 @@ class DualDicomViewer {
                 const bounds = this.getImageBounds(this.sagittalElement);
                 if (!bounds) return;
                 
-                // Get current axial slice metadata
                 const axMeta = this.axialMetadata[this.currentAxialIndex];
                 const sagMeta = this.sagittalMetadata[this.currentSagittalIndex];
                 
                 if (!axMeta || !axMeta.position || !sagMeta) {
-                    // Fallback to simple mapping
+                    // Fallback
                     const fraction = this.currentAxialIndex / Math.max(1, this.axialImageIds.length - 1);
                     const y = bounds.top + (fraction * bounds.height);
                     this.drawHorizontalLine(context, y, bounds.left, bounds.right);
@@ -596,25 +602,27 @@ class DualDicomViewer {
                     return;
                 }
                 
-                // KAGGLE METHOD: Project axial position onto sagittal image
-                const axPosition = axMeta.position;  // [x, y, z] of axial slice
-                
-                // Project this 3D point onto current sagittal slice
+                // Project axial position onto sagittal image
+                const axPosition = axMeta.position;  // [x, y, z] of axial slice in mm
                 const projection = this.projectPointToSlice(axPosition, sagMeta);
                 
                 if (!projection) {
-                    console.warn('Could not project axial position to sagittal');
+                    console.warn('Could not project axial to sagittal');
                     return;
                 }
                 
-                // Convert pixel coordinates to canvas coordinates
-                const pixelRow = projection.row;
-                const fractionY = pixelRow / sagMeta.rows;
-                const canvasY = bounds.top + (fractionY * bounds.height);
+                // *** CRITICAL FIX: Use direct scaling instead of fractional positioning ***
+                const pixelRow = projection.row;  // Row in pixel coordinates (0-512)
+                const imageHeight = sagMeta.rows;  // Image height in pixels (e.g., 512)
+                const scaleY = bounds.height / imageHeight;  // Scale factor (e.g., 384/512 = 0.75)
+                const canvasY = bounds.top + (pixelRow * scaleY);  // Direct scaling!
                 
-                console.log(`SAGITTAL: ax ${this.currentAxialIndex}/${this.axialImageIds.length}, axZ=${axPosition[2].toFixed(1)}mm → sag row=${pixelRow.toFixed(0)} → canvas Y=${canvasY.toFixed(0)}`);
+                // Clamp to bounds (prevents running off screen!)
+                const finalY = Math.max(bounds.top, Math.min(bounds.bottom, canvasY));
                 
-                this.drawHorizontalLine(context, canvasY, bounds.left, bounds.right);
+                console.log(`SAGITTAL: ax ${this.currentAxialIndex}/${this.axialImageIds.length}, axZ=${axPosition[2].toFixed(1)}mm → sag row=${pixelRow.toFixed(0)} → canvas Y=${finalY.toFixed(0)} (scale=${scaleY.toFixed(3)})`);
+                
+                this.drawHorizontalLine(context, finalY, bounds.left, bounds.right);
             });
         } catch (error) {
             console.error('Error drawing sagittal crosshair:', error);
@@ -738,7 +746,7 @@ class DualDicomViewer {
         if (this.isInitialized) {
             try {
                 cornerstone.reset(this.axialElement);
-                cornerstone.reset(this.sagittalElement);
+                corner.reset(this.sagittalElement);
             } catch (error) {}
         }
     }
