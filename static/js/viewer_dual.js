@@ -1,6 +1,9 @@
 /**
- * Dual-View DICOM Viewer - FINAL VERSION
- * Fixes: "resize is not a function" crash & White Screen Bug
+ * Dual-View DICOM Viewer - ULTIMATE MERGED VERSION
+ * Fixes:
+ * 1. "resize is not a function" (Added resize method)
+ * 2. White Screen (resize triggers redraw)
+ * 3. Ghost Lines (Added bounds checking from Claude)
  */
 
 class DualDicomViewer {
@@ -37,7 +40,7 @@ class DualDicomViewer {
             cornerstone.enable(this.axialElement);
             cornerstone.enable(this.sagittalElement);
             
-            // Create overlays (initially 0x0 if hidden)
+            // Create overlays (initially 0x0 if hidden, fixed by resize() later)
             this.axialOverlay = this.createOverlayCanvas(this.axialElement);
             this.sagittalOverlay = this.createOverlayCanvas(this.sagittalElement);
             
@@ -51,8 +54,8 @@ class DualDicomViewer {
     }
 
     /**
-     * PUBLIC RESIZE METHOD - REQUIRED BY APP.JS
-     * This fixes the 0x0 White Canvas bug
+     * [FIX 1] PUBLIC RESIZE METHOD
+     * Required by app_dual.js to fix the White Screen bug
      */
     resize() {
         console.log('⚡ Manual Resize Triggered');
@@ -184,13 +187,15 @@ class DualDicomViewer {
         const midAx = Math.floor(this.axialImageIds.length / 2);
         const midSag = Math.floor(this.sagittalImageIds.length / 2);
         
-        // Note: Display might render white first if hidden, fixed by resize() in app.js
         await Promise.all([
             this.displayAxialImage(midAx),
             this.displaySagittalImage(midSag)
         ]);
         
         this.updateSliceInfo();
+        
+        // Resize check to ensure canvas is correct size
+        setTimeout(() => this.resize(), 100);
     }
 
     async loadAxialSeries(files) {
@@ -269,16 +274,20 @@ class DualDicomViewer {
         
         if (proj) {
             const canvasPoint = cornerstone.pixelToCanvas(this.axialElement, { x: proj.x, y: proj.y });
-            // Draw Vertical Line
-            ctx.save();
-            ctx.beginPath();
-            ctx.strokeStyle = '#00ff00';
-            ctx.lineWidth = 2;
-            ctx.setLineDash([5, 5]);
-            ctx.moveTo(canvasPoint.x, 0);
-            ctx.lineTo(canvasPoint.x, this.axialOverlay.height);
-            ctx.stroke();
-            ctx.restore();
+            
+            // [FIX 2] BOUNDS CHECK (From Claude)
+            // For Axial Crosshair, we care about the VERTICAL line (X position)
+            if (canvasPoint.x >= 0 && canvasPoint.x <= this.axialOverlay.width) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.strokeStyle = '#00ff00';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 5]);
+                ctx.moveTo(canvasPoint.x, 0);
+                ctx.lineTo(canvasPoint.x, this.axialOverlay.height);
+                ctx.stroke();
+                ctx.restore();
+            }
         }
     }
 
@@ -294,16 +303,20 @@ class DualDicomViewer {
         
         if (proj) {
             const canvasPoint = cornerstone.pixelToCanvas(this.sagittalElement, { x: proj.x, y: proj.y });
-            // Draw Horizontal Line
-            ctx.save();
-            ctx.beginPath();
-            ctx.strokeStyle = '#00ff00';
-            ctx.lineWidth = 2;
-            ctx.setLineDash([5, 5]);
-            ctx.moveTo(0, canvasPoint.y);
-            ctx.lineTo(this.sagittalOverlay.width, canvasPoint.y);
-            ctx.stroke();
-            ctx.restore();
+            
+            // [FIX 2] BOUNDS CHECK (From Claude)
+            // For Sagittal Crosshair, we care about the HORIZONTAL line (Y position)
+            if (canvasPoint.y >= 0 && canvasPoint.y <= this.sagittalOverlay.height) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.strokeStyle = '#00ff00';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 5]);
+                ctx.moveTo(0, canvasPoint.y);
+                ctx.lineTo(this.sagittalOverlay.width, canvasPoint.y);
+                ctx.stroke();
+                ctx.restore();
+            }
         }
     }
 
