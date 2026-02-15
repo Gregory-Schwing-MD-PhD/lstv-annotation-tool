@@ -1,4 +1,4 @@
-// Dual-View DICOM Viewer - GEOMETRIC CENTER + SCALED RANGES
+// Dual-View DICOM Viewer - FIXED CROSSHAIR SYNCHRONIZATION
 class DualDicomViewer {
     constructor(axialElementId, sagittalElementId) {
         this.axialElement = document.getElementById(axialElementId);
@@ -154,9 +154,7 @@ class DualDicomViewer {
                 right: right,
                 bottom: bottom,
                 width: renderedWidth,
-                height: renderedHeight,
-                centerX: left + renderedWidth / 2,
-                centerY: top + renderedHeight / 2
+                height: renderedHeight
             };
         } catch (error) {
             console.error('Error getting image bounds:', error);
@@ -175,17 +173,19 @@ class DualDicomViewer {
         this.sagittalElement.style.width = '100%';
         this.sagittalElement.style.height = '600px';
         
-        this.showLoading(this.axialElement, 'Loading axial series...');
-        this.showLoading(this.sagittalElement, 'Loading sagittal series...');
+        this.showLoading(this.axialElement, 'Loading axial...');
+        this.showLoading(this.sagittalElement, 'Loading sagittal...');
         
         const startTime = Date.now();
+        
+        // Load in parallel
         await Promise.all([
             this.loadAxialSeries(axialFiles),
             this.loadSagittalSeries(sagittalFiles)
         ]);
-        const loadTime = ((Date.now() - startTime) / 1000).toFixed(1);
         
-        console.log(`✓ Both series loaded in ${loadTime}s (parallel)`);
+        const loadTime = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(`✓ Loaded in ${loadTime}s`);
         
         this.hideLoading(this.axialElement);
         this.hideLoading(this.sagittalElement);
@@ -201,15 +201,11 @@ class DualDicomViewer {
         setTimeout(() => {
             try {
                 cornerstone.resize(this.axialElement, true);
-                cornerstone.updateImage(this.axialElement);
-            } catch (e) {}
-            
-            try {
                 cornerstone.resize(this.sagittalElement, true);
+                cornerstone.updateImage(this.axialElement);
                 cornerstone.updateImage(this.sagittalElement);
+                this.updateCrosshairs();
             } catch (e) {}
-            
-            this.updateCrosshairs();
         }, 150);
         
         this.updateSliceInfo();
@@ -219,41 +215,27 @@ class DualDicomViewer {
         const loadingDiv = document.createElement('div');
         loadingDiv.className = 'loading-overlay';
         loadingDiv.style.cssText = `
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.8);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            z-index: 1000;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); display: flex; flex-direction: column;
+            align-items: center; justify-content: center; color: white; z-index: 1000;
         `;
-        
         loadingDiv.innerHTML = `
             <div style="width: 40px; height: 40px; border: 4px solid #444; border-top: 4px solid #2563eb; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 1rem;"></div>
             <p>${message}</p>
         `;
-        
         element.parentElement.style.position = 'relative';
         element.parentElement.appendChild(loadingDiv);
     }
 
     hideLoading(element) {
         const loadingDiv = element.parentElement.querySelector('.loading-overlay');
-        if (loadingDiv) {
-            loadingDiv.remove();
-        }
+        if (loadingDiv) loadingDiv.remove();
     }
 
     async loadAxialSeries(axialFiles) {
         if (!axialFiles || axialFiles.length === 0) return;
         
         this.axialImageIds = [];
-        
         const results = await Promise.all(
             axialFiles.map(async (file) => {
                 try {
@@ -261,7 +243,6 @@ class DualDicomViewer {
                     const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
                     return { id: imageId, filename: file.filename };
                 } catch (error) {
-                    console.error(`Error loading axial ${file.filename}:`, error);
                     return null;
                 }
             })
@@ -271,14 +252,13 @@ class DualDicomViewer {
             .filter(r => r !== null)
             .sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
         
-        console.log(`✓ Loaded ${this.axialImageIds.length} axial images`);
+        console.log(`✓ ${this.axialImageIds.length} axial`);
     }
 
     async loadSagittalSeries(sagittalFiles) {
         if (!sagittalFiles || sagittalFiles.length === 0) return;
         
         this.sagittalImageIds = [];
-        
         const results = await Promise.all(
             sagittalFiles.map(async (file) => {
                 try {
@@ -286,7 +266,6 @@ class DualDicomViewer {
                     const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
                     return { id: imageId, filename: file.filename };
                 } catch (error) {
-                    console.error(`Error loading sagittal ${file.filename}:`, error);
                     return null;
                 }
             })
@@ -296,7 +275,7 @@ class DualDicomViewer {
             .filter(r => r !== null)
             .sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
         
-        console.log(`✓ Loaded ${this.sagittalImageIds.length} sagittal images`);
+        console.log(`✓ ${this.sagittalImageIds.length} sagittal`);
     }
 
     async displayAxialImage(index) {
@@ -323,7 +302,7 @@ class DualDicomViewer {
             
             setTimeout(() => this.updateCrosshairs(), 10);
         } catch (error) {
-            console.error('Error displaying axial image:', error);
+            console.error('Error displaying axial:', error);
         }
     }
 
@@ -351,7 +330,7 @@ class DualDicomViewer {
             
             setTimeout(() => this.updateCrosshairs(), 10);
         } catch (error) {
-            console.error('Error displaying sagittal image:', error);
+            console.error('Error displaying sagittal:', error);
         }
     }
 
@@ -360,36 +339,28 @@ class DualDicomViewer {
         this.drawCrosshairOnSagittal();
     }
 
-    // Vertical line on AXIAL - centered at midline, scaled by sagittal slice count
+    // AXIAL: Vertical line shows which SAGITTAL slice we're viewing
+    // sagittal 0/17 -> LEFT edge, sagittal 16/17 -> RIGHT edge
     drawCrosshairOnAxial() {
         try {
             const canvas = this.axialElement.querySelector('canvas');
             if (!canvas) return;
             
             const context = canvas.getContext('2d');
-            if (!context) return;
-            
             cornerstone.updateImage(this.axialElement);
             
             requestAnimationFrame(() => {
                 const bounds = this.getImageBounds(this.axialElement);
                 if (!bounds) return;
                 
-                const totalSagittal = this.sagittalImageIds.length;
-                const currentSagittal = this.currentSagittalIndex;
-                const middleSagittal = Math.floor(totalSagittal / 2);
+                const totalSag = this.sagittalImageIds.length;
+                const currentSag = this.currentSagittalIndex;
                 
-                // Calculate offset from middle sagittal slice
-                const offsetFromMiddle = currentSagittal - middleSagittal;
+                // Map sagittal index directly to X position across image width
+                const fraction = totalSag > 1 ? currentSag / (totalSag - 1) : 0.5;
+                const x = bounds.left + (fraction * bounds.width);
                 
-                // Scale the range to use 80% of image width
-                const rangeWidth = bounds.width * 0.8;
-                const pixelsPerSlice = rangeWidth / Math.max(1, totalSagittal - 1);
-                
-                // Start at geometric center, add offset
-                const x = bounds.centerX + (offsetFromMiddle * pixelsPerSlice);
-                
-                console.log(`Axial: sag ${currentSagittal}/${totalSagittal}, offset=${offsetFromMiddle}, X=${x.toFixed(0)}, center=${bounds.centerX.toFixed(0)}, range=${rangeWidth.toFixed(0)}`);
+                console.log(`AXIAL: sag ${currentSag}/${totalSag} -> X=${x.toFixed(0)} (left=${bounds.left.toFixed(0)}, width=${bounds.width.toFixed(0)})`);
                 
                 this.drawVerticalLine(context, x, bounds.top, bounds.bottom);
             });
@@ -398,36 +369,28 @@ class DualDicomViewer {
         }
     }
 
-    // Horizontal line on SAGITTAL - centered at midline, scaled by axial slice count
+    // SAGITTAL: Horizontal line shows which AXIAL slice we're viewing
+    // axial 0/27 -> TOP edge, axial 26/27 -> BOTTOM edge
     drawCrosshairOnSagittal() {
         try {
             const canvas = this.sagittalElement.querySelector('canvas');
             if (!canvas) return;
             
             const context = canvas.getContext('2d');
-            if (!context) return;
-            
             cornerstone.updateImage(this.sagittalElement);
             
             requestAnimationFrame(() => {
                 const bounds = this.getImageBounds(this.sagittalElement);
                 if (!bounds) return;
                 
-                const totalAxial = this.axialImageIds.length;
-                const currentAxial = this.currentAxialIndex;
-                const middleAxial = Math.floor(totalAxial / 2);
+                const totalAx = this.axialImageIds.length;
+                const currentAx = this.currentAxialIndex;
                 
-                // Calculate offset from middle axial slice
-                const offsetFromMiddle = currentAxial - middleAxial;
+                // Map axial index directly to Y position across image height
+                const fraction = totalAx > 1 ? currentAx / (totalAx - 1) : 0.5;
+                const y = bounds.top + (fraction * bounds.height);
                 
-                // Scale the range to use 80% of image height
-                const rangeHeight = bounds.height * 0.8;
-                const pixelsPerSlice = rangeHeight / Math.max(1, totalAxial - 1);
-                
-                // Start at geometric center, add offset
-                const y = bounds.centerY + (offsetFromMiddle * pixelsPerSlice);
-                
-                console.log(`Sagittal: ax ${currentAxial}/${totalAxial}, offset=${offsetFromMiddle}, Y=${y.toFixed(0)}, center=${bounds.centerY.toFixed(0)}, range=${rangeHeight.toFixed(0)}`);
+                console.log(`SAGITTAL: ax ${currentAx}/${totalAx} -> Y=${y.toFixed(0)} (top=${bounds.top.toFixed(0)}, height=${bounds.height.toFixed(0)})`);
                 
                 this.drawHorizontalLine(context, y, bounds.left, bounds.right);
             });
@@ -508,7 +471,6 @@ class DualDicomViewer {
 
     play() {
         if (this.axialImageIds.length === 0) return;
-        
         this.isPlaying = true;
         this.playInterval = setInterval(() => {
             if (this.currentAxialIndex < this.axialImageIds.length - 1) {
