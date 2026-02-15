@@ -1,4 +1,25 @@
-// Dual-View DICOM Viewer - FIXED CROSSHAIR SYNCHRONIZATION
+/**
+ * Dual-View DICOM Viewer with PROPER Spatial Coordinate Mapping
+ * 
+ * BASED ON: RSNA 2024 2nd Place Kaggle Solution
+ * 
+ * KEY DICOM METADATA USED:
+ * 1. ImagePositionPatient [x, y, z] - Position of top-left pixel in world coords (mm)
+ * 2. ImageOrientationPatient [rowX, rowY, rowZ, colX, colY, colZ] - Direction cosines
+ * 3. PixelSpacing [row_spacing, col_spacing] - Physical distance between pixels (mm)
+ * 
+ * COORDINATE SYSTEM:
+ * - X: Left(-) to Right(+)  (patient's left/right)
+ * - Y: Posterior(-) to Anterior(+)  (back to front)
+ * - Z: Inferior(-) to Superior(+)  (feet to head)
+ * 
+ * CROSSHAIR LOGIC (from Kaggle):
+ * 1. Get ImagePositionPatient for current slice in one view
+ * 2. Get ImageOrientationPatient to calculate plane normal
+ * 3. Project that 3D point onto the other view's slices
+ * 4. Find closest slice and calculate pixel position
+ */
+
 class DualDicomViewer {
     constructor(axialElementId, sagittalElementId) {
         this.axialElement = document.getElementById(axialElementId);
@@ -6,6 +27,10 @@ class DualDicomViewer {
         
         this.axialImageIds = [];
         this.sagittalImageIds = [];
+        
+        // Store DICOM spatial metadata for each slice
+        this.axialMetadata = [];  // {position: [x,y,z], orientation: [...], spacing: [row,col]}
+        this.sagittalMetadata = [];
         
         this.currentAxialIndex = 0;
         this.currentSagittalIndex = 0;
@@ -121,23 +146,124 @@ class DualDicomViewer {
         });
     }
 
+    /**
+     * Extract DICOM spatial metadata from image
+     * Returns: {position: [x,y,z], orientation: [6 values], spacing: [row,col], rows, columns}
+     */
+    async extractDicomMetadata(imageId) {
+        try {
+            const image = await cornerstone.loadImage(imageId);
+            
+            const metadata = {
+                position: null,      // ImagePositionPatient [x, y, z]
+                orientation: null,   // ImageOrientationPatient [rowX, rowY, rowZ, colX, colY, colZ]
+                spacing: null,       // PixelSpacing [row, col]
+                rows: image.rows || 512,
+                columns: image.columns || 512
+            };
+            
+            // Try to get from DICOM data tags
+            if (image.data && image.data.string) {
+                // ImagePositionPatient (0020,0032)
+                const ipp = image.data.string('x00200032');
+                if (ipp) {
+                    metadata.position = ipp.split('\\').map(parseFloat);
+                }
+                
+                // ImageOrientationPatient (0020,0037)
+                const iop = image.data.string('x00200037');
+                if (iop) {
+                    metadata.orientation = iop.split('\\').map(parseFloat);
+                }
+                
+                // PixelSpacing (0028,0030)
+                const ps = image.data.string('x00280030');
+                if (ps) {
+                    metadata.spacing = ps.split('\\').map(parseFloat);
+                }
+            }
+            
+            // Fallback to direct properties
+            if (!metadata.position && image.imagePositionPatient) {
+                metadata.position = image.imagePositionPatient;
+            }
+            if (!metadata.orientation && image.imageOrientationPatient) {
+                metadata.orientation = image.imageOrientationPatient;
+            }
+            if (!metadata.spacing && image.pixelSpacing) {
+                metadata.spacing = image.pixelSpacing;
+            }
+            
+            return metadata;
+        } catch (error) {
+            console.error('Error extracting DICOM metadata:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Calculate plane normal vector from ImageOrientationPatient
+     * ImageOrientationPatient = [rowX, rowY, rowZ, colX, colY, colZ]
+     * Normal = cross product of row and column vectors
+     */
+    calculatePlaneNormal(orientation) {
+        if (!orientation || orientation.length !== 6) return null;
+        
+        // Row direction cosines
+        const row = [orientation[0], orientation[1], orientation[2]];
+        // Column direction cosines
+        const col = [orientation[3], orientation[4], orientation[5]];
+        
+        // Cross product: row × col
+        const normal = [
+            row[1] * col[2] - row[2] * col[1],
+            row[2] * col[0] - row[0] * col[2],
+            row[0] * col[1] - row[1] * col[0]
+        ];
+        
+        return normal;
+    }
+
+    /**
+     * Project a 3D world point onto an image slice
+     * Returns pixel coordinates (row, col) on that slice
+     */
+    projectPointToSlice(worldPoint, sliceMetadata) {
+        if (!sliceMetadata.position || !sliceMetadata.orientation || !sliceMetadata.spacing) {
+            return null;
+        }
+        
+        const [px, py, pz] = worldPoint;  // Point to project
+        const [sx, sy, sz] = sliceMetadata.position;  // Slice origin
+        const [rowX, rowY, rowZ, colX, colY, colZ] = sliceMetadata.orientation;
+        const [rowSpacing, colSpacing] = sliceMetadata.spacing;
+        
+        // Vector from slice origin to point
+        const dx = px - sx;
+        const dy = py - sy;
+        const dz = pz - sz;
+        
+        // Project onto row direction (gives column index)
+        const col = (dx * rowX + dy * rowY + dz * rowZ) / rowSpacing;
+        
+        // Project onto column direction (gives row index)
+        const row = (dx * colX + dy * colY + dz * colZ) / colSpacing;
+        
+        return {row, col};
+    }
+
     getImageBounds(element) {
         try {
             const enabledElement = cornerstone.getEnabledElement(element);
-            if (!enabledElement || !enabledElement.image) {
-                return null;
-            }
+            if (!enabledElement || !enabledElement.image) return null;
             
             const image = enabledElement.image;
             const viewport = enabledElement.viewport;
             const canvas = enabledElement.canvas;
             
-            const imageWidth = image.width;
-            const imageHeight = image.height;
-            
             const scale = viewport.scale || 1;
-            const renderedWidth = imageWidth * scale;
-            const renderedHeight = imageHeight * scale;
+            const renderedWidth = image.width * scale;
+            const renderedHeight = image.height * scale;
             
             const translation = viewport.translation || { x: 0, y: 0 };
             const canvasWidth = canvas.width;
@@ -145,19 +271,15 @@ class DualDicomViewer {
             
             const left = (canvasWidth / 2) - (renderedWidth / 2) + translation.x;
             const top = (canvasHeight / 2) - (renderedHeight / 2) + translation.y;
-            const right = left + renderedWidth;
-            const bottom = top + renderedHeight;
             
             return {
-                left: left,
-                top: top,
-                right: right,
-                bottom: bottom,
+                left, top,
+                right: left + renderedWidth,
+                bottom: top + renderedHeight,
                 width: renderedWidth,
                 height: renderedHeight
             };
         } catch (error) {
-            console.error('Error getting image bounds:', error);
             return null;
         }
     }
@@ -178,14 +300,14 @@ class DualDicomViewer {
         
         const startTime = Date.now();
         
-        // Load in parallel
+        // Load BOTH series in parallel with metadata extraction
         await Promise.all([
             this.loadAxialSeries(axialFiles),
             this.loadSagittalSeries(sagittalFiles)
         ]);
         
         const loadTime = ((Date.now() - startTime) / 1000).toFixed(1);
-        console.log(`✓ Loaded in ${loadTime}s`);
+        console.log(`✓ Loaded in ${loadTime}s with spatial metadata`);
         
         this.hideLoading(this.axialElement);
         this.hideLoading(this.sagittalElement);
@@ -214,15 +336,8 @@ class DualDicomViewer {
     showLoading(element, message) {
         const loadingDiv = document.createElement('div');
         loadingDiv.className = 'loading-overlay';
-        loadingDiv.style.cssText = `
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.8); display: flex; flex-direction: column;
-            align-items: center; justify-content: center; color: white; z-index: 1000;
-        `;
-        loadingDiv.innerHTML = `
-            <div style="width: 40px; height: 40px; border: 4px solid #444; border-top: 4px solid #2563eb; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 1rem;"></div>
-            <p>${message}</p>
-        `;
+        loadingDiv.style.cssText = `position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);display:flex;flex-direction:column;align-items:center;justify-content:center;color:white;z-index:1000;`;
+        loadingDiv.innerHTML = `<div style="width:40px;height:40px;border:4px solid #444;border-top:4px solid #2563eb;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:1rem;"></div><p>${message}</p>`;
         element.parentElement.style.position = 'relative';
         element.parentElement.appendChild(loadingDiv);
     }
@@ -232,50 +347,93 @@ class DualDicomViewer {
         if (loadingDiv) loadingDiv.remove();
     }
 
+    /**
+     * Load axial series with DICOM metadata extraction
+     * Each slice gets: position, orientation, spacing
+     */
     async loadAxialSeries(axialFiles) {
         if (!axialFiles || axialFiles.length === 0) return;
         
         this.axialImageIds = [];
+        this.axialMetadata = [];
+        
+        // Load ALL files in parallel with metadata
         const results = await Promise.all(
             axialFiles.map(async (file) => {
                 try {
                     const blob = new Blob([file.data], { type: 'application/dicom' });
                     const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
-                    return { id: imageId, filename: file.filename };
+                    
+                    // CRITICAL: Extract DICOM metadata
+                    const metadata = await this.extractDicomMetadata(imageId);
+                    
+                    return { id: imageId, filename: file.filename, metadata };
                 } catch (error) {
+                    console.error(`Error loading axial ${file.filename}:`, error);
                     return null;
                 }
             })
         );
         
-        this.axialImageIds = results
-            .filter(r => r !== null)
-            .sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
+        // Sort and store
+        const validResults = results.filter(r => r !== null);
+        validResults.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
         
-        console.log(`✓ ${this.axialImageIds.length} axial`);
+        this.axialImageIds = validResults.map(r => ({ id: r.id, filename: r.filename }));
+        this.axialMetadata = validResults.map(r => r.metadata);
+        
+        console.log(`✓ ${this.axialImageIds.length} axial with metadata`);
+        
+        // Log sample metadata
+        if (this.axialMetadata[0] && this.axialMetadata[0].position) {
+            const first = this.axialMetadata[0];
+            const last = this.axialMetadata[this.axialMetadata.length - 1];
+            console.log(`  Axial Z range: ${first.position[2].toFixed(1)} to ${last.position[2].toFixed(1)} mm`);
+        }
     }
 
+    /**
+     * Load sagittal series with DICOM metadata extraction
+     */
     async loadSagittalSeries(sagittalFiles) {
         if (!sagittalFiles || sagittalFiles.length === 0) return;
         
         this.sagittalImageIds = [];
+        this.sagittalMetadata = [];
+        
+        // Load ALL files in parallel with metadata
         const results = await Promise.all(
             sagittalFiles.map(async (file) => {
                 try {
                     const blob = new Blob([file.data], { type: 'application/dicom' });
                     const imageId = cornerstoneWADOImageLoader.wadouri.fileManager.add(blob);
-                    return { id: imageId, filename: file.filename };
+                    
+                    // CRITICAL: Extract DICOM metadata
+                    const metadata = await this.extractDicomMetadata(imageId);
+                    
+                    return { id: imageId, filename: file.filename, metadata };
                 } catch (error) {
+                    console.error(`Error loading sagittal ${file.filename}:`, error);
                     return null;
                 }
             })
         );
         
-        this.sagittalImageIds = results
-            .filter(r => r !== null)
-            .sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
+        // Sort and store
+        const validResults = results.filter(r => r !== null);
+        validResults.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric: true}));
         
-        console.log(`✓ ${this.sagittalImageIds.length} sagittal`);
+        this.sagittalImageIds = validResults.map(r => ({ id: r.id, filename: r.filename }));
+        this.sagittalMetadata = validResults.map(r => r.metadata);
+        
+        console.log(`✓ ${this.sagittalImageIds.length} sagittal with metadata`);
+        
+        // Log sample metadata
+        if (this.sagittalMetadata[0] && this.sagittalMetadata[0].position) {
+            const first = this.sagittalMetadata[0];
+            const last = this.sagittalMetadata[this.sagittalMetadata.length - 1];
+            console.log(`  Sagittal X range: ${first.position[0].toFixed(1)} to ${last.position[0].toFixed(1)} mm`);
+        }
     }
 
     async displayAxialImage(index) {
@@ -339,8 +497,18 @@ class DualDicomViewer {
         this.drawCrosshairOnSagittal();
     }
 
-    // AXIAL: Vertical line shows which SAGITTAL slice we're viewing
-    // sagittal 0/17 -> LEFT edge, sagittal 16/17 -> RIGHT edge
+    /**
+     * AXIAL CROSSHAIR - Like Kaggle solution
+     * 
+     * WHAT WE'RE DOING:
+     * 1. Get 3D world position of current SAGITTAL slice (its ImagePositionPatient)
+     * 2. Map that 3D point to a pixel (col, row) on the AXIAL image
+     * 3. Draw vertical line at that column position
+     * 
+     * WHY: Sagittal slices have different X positions (left-right)
+     *      Axial image columns also represent X positions (left-right)
+     *      So we map sagittal X → axial column
+     */
     drawCrosshairOnAxial() {
         try {
             const canvas = this.axialElement.querySelector('canvas');
@@ -353,24 +521,56 @@ class DualDicomViewer {
                 const bounds = this.getImageBounds(this.axialElement);
                 if (!bounds) return;
                 
-                const totalSag = this.sagittalImageIds.length;
-                const currentSag = this.currentSagittalIndex;
+                // Get current sagittal slice metadata
+                const sagMeta = this.sagittalMetadata[this.currentSagittalIndex];
+                const axMeta = this.axialMetadata[this.currentAxialIndex];
                 
-                // Map sagittal index directly to X position across image width
-                const fraction = totalSag > 1 ? currentSag / (totalSag - 1) : 0.5;
-                const x = bounds.left + (fraction * bounds.width);
+                if (!sagMeta || !sagMeta.position || !axMeta) {
+                    // Fallback to simple mapping
+                    const fraction = this.currentSagittalIndex / Math.max(1, this.sagittalImageIds.length - 1);
+                    const x = bounds.left + (fraction * bounds.width);
+                    this.drawVerticalLine(context, x, bounds.top, bounds.bottom);
+                    console.log(`AXIAL (fallback): X=${x.toFixed(0)}`);
+                    return;
+                }
                 
-                console.log(`AXIAL: sag ${currentSag}/${totalSag} -> X=${x.toFixed(0)} (left=${bounds.left.toFixed(0)}, width=${bounds.width.toFixed(0)})`);
+                // KAGGLE METHOD: Project sagittal position onto axial image
+                const sagPosition = sagMeta.position;  // [x, y, z] of sagittal slice
                 
-                this.drawVerticalLine(context, x, bounds.top, bounds.bottom);
+                // Project this 3D point onto current axial slice
+                const projection = this.projectPointToSlice(sagPosition, axMeta);
+                
+                if (!projection) {
+                    console.warn('Could not project sagittal position to axial');
+                    return;
+                }
+                
+                // Convert pixel coordinates to canvas coordinates
+                const pixelCol = projection.col;
+                const fractionX = pixelCol / axMeta.columns;
+                const canvasX = bounds.left + (fractionX * bounds.width);
+                
+                console.log(`AXIAL: sag ${this.currentSagittalIndex}/${this.sagittalImageIds.length}, sagX=${sagPosition[0].toFixed(1)}mm → axial col=${pixelCol.toFixed(0)} → canvas X=${canvasX.toFixed(0)}`);
+                
+                this.drawVerticalLine(context, canvasX, bounds.top, bounds.bottom);
             });
         } catch (error) {
             console.error('Error drawing axial crosshair:', error);
         }
     }
 
-    // SAGITTAL: Horizontal line shows which AXIAL slice we're viewing
-    // axial 0/27 -> TOP edge, axial 26/27 -> BOTTOM edge
+    /**
+     * SAGITTAL CROSSHAIR - Like Kaggle solution
+     * 
+     * WHAT WE'RE DOING:
+     * 1. Get 3D world position of current AXIAL slice (its ImagePositionPatient Z coordinate)
+     * 2. Map that Z position to a pixel row on the SAGITTAL image
+     * 3. Draw horizontal line at that row position
+     * 
+     * WHY: Axial slices have different Z positions (head-feet)
+     *      Sagittal image rows also represent Z positions (head-feet)
+     *      So we map axial Z → sagittal row
+     */
     drawCrosshairOnSagittal() {
         try {
             const canvas = this.sagittalElement.querySelector('canvas');
@@ -383,16 +583,38 @@ class DualDicomViewer {
                 const bounds = this.getImageBounds(this.sagittalElement);
                 if (!bounds) return;
                 
-                const totalAx = this.axialImageIds.length;
-                const currentAx = this.currentAxialIndex;
+                // Get current axial slice metadata
+                const axMeta = this.axialMetadata[this.currentAxialIndex];
+                const sagMeta = this.sagittalMetadata[this.currentSagittalIndex];
                 
-                // Map axial index directly to Y position across image height
-                const fraction = totalAx > 1 ? currentAx / (totalAx - 1) : 0.5;
-                const y = bounds.top + (fraction * bounds.height);
+                if (!axMeta || !axMeta.position || !sagMeta) {
+                    // Fallback to simple mapping
+                    const fraction = this.currentAxialIndex / Math.max(1, this.axialImageIds.length - 1);
+                    const y = bounds.top + (fraction * bounds.height);
+                    this.drawHorizontalLine(context, y, bounds.left, bounds.right);
+                    console.log(`SAGITTAL (fallback): Y=${y.toFixed(0)}`);
+                    return;
+                }
                 
-                console.log(`SAGITTAL: ax ${currentAx}/${totalAx} -> Y=${y.toFixed(0)} (top=${bounds.top.toFixed(0)}, height=${bounds.height.toFixed(0)})`);
+                // KAGGLE METHOD: Project axial position onto sagittal image
+                const axPosition = axMeta.position;  // [x, y, z] of axial slice
                 
-                this.drawHorizontalLine(context, y, bounds.left, bounds.right);
+                // Project this 3D point onto current sagittal slice
+                const projection = this.projectPointToSlice(axPosition, sagMeta);
+                
+                if (!projection) {
+                    console.warn('Could not project axial position to sagittal');
+                    return;
+                }
+                
+                // Convert pixel coordinates to canvas coordinates
+                const pixelRow = projection.row;
+                const fractionY = pixelRow / sagMeta.rows;
+                const canvasY = bounds.top + (fractionY * bounds.height);
+                
+                console.log(`SAGITTAL: ax ${this.currentAxialIndex}/${this.axialImageIds.length}, axZ=${axPosition[2].toFixed(1)}mm → sag row=${pixelRow.toFixed(0)} → canvas Y=${canvasY.toFixed(0)}`);
+                
+                this.drawHorizontalLine(context, canvasY, bounds.left, bounds.right);
             });
         } catch (error) {
             console.error('Error drawing sagittal crosshair:', error);
@@ -508,6 +730,8 @@ class DualDicomViewer {
         this.stop();
         this.axialImageIds = [];
         this.sagittalImageIds = [];
+        this.axialMetadata = [];
+        this.sagittalMetadata = [];
         this.currentAxialIndex = 0;
         this.currentSagittalIndex = 0;
         
