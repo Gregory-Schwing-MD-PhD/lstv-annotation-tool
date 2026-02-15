@@ -89,8 +89,15 @@ class LSTVDualAnnotationApp {
     async loadStudy(study) {
         this.currentStudy = study;
         document.getElementById('currentStudyId').textContent = study.study_id;
-        document.getElementById('loadingMessage').style.display = 'flex';
-        // HIDE container while loading
+        
+        // Show Loading, Hide Viewer
+        const loadingEl = document.getElementById('loadingMessage');
+        loadingEl.style.display = 'flex';
+        // Reset text
+        const span = loadingEl.querySelector('span');
+        if (span) span.textContent = 'Preparing study...';
+        else loadingEl.textContent = 'Preparing study...';
+        
         document.getElementById('dualViewContainer').style.display = 'none';
 
         try {
@@ -106,12 +113,14 @@ class LSTVDualAnnotationApp {
             await dicomViewer.loadDualSeries(axFiles, sagFiles);
 
             document.getElementById('loadingMessage').style.display = 'none';
-            
-            // SHOW container
             document.getElementById('dualViewContainer').style.display = 'grid';
             
-            // CRITICAL: Force resize now that container is visible (width > 0)
-            dicomViewer.resize();
+            // CRITICAL: Force resize now that container is visible
+            if (typeof dicomViewer.resize === 'function') {
+                dicomViewer.resize();
+            } else {
+                console.error("CRITICAL: resize() missing from dicomViewer. Update viewer_dual.js!");
+            }
 
         } catch (error) {
             console.error(error);
@@ -129,10 +138,15 @@ class LSTVDualAnnotationApp {
             filenames = ['1.dcm', '2.dcm', '3.dcm']; 
         }
 
-        // Added Progress Callback
         return await storageManager.downloadSeries(studyId, series.series_id, filenames, (current, total) => {
-            const msg = document.querySelector('#loadingMessage span');
-            if (msg) msg.textContent = `Downloading ${series.description || 'series'}: ${current}/${total}...`;
+            const loadingEl = document.getElementById('loadingMessage');
+            if (!loadingEl) return;
+            
+            const text = `Downloading ${series.description || 'series'}: ${current}/${total}`;
+            const span = loadingEl.querySelector('span');
+            
+            if (span) span.textContent = text;
+            else loadingEl.textContent = text;
         });
     }
 
