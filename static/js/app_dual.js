@@ -1,5 +1,5 @@
-// app_dual.js - Main application logic with dual-view study loading
-// CRITICAL: This file handles the display timing sequence to prevent white screens
+// app_dual.js - Main application logic with proper file download handling
+// Uses storageManager.downloadSeries() with progress callback
 
 // =============================================================================
 // GLOBAL STATE
@@ -64,9 +64,10 @@ function waitForAuth() {
 // =============================================================================
 async function loadAvailableStudies() {
     try {
+        // Load studies that are "ready" status (matching your original logic)
         const snapshot = await firebase.firestore()
             .collection('studies')
-            .orderBy('created_at', 'asc')
+            .where('status', '==', 'ready')
             .get();
 
         allStudies = snapshot.docs.map(doc => ({
@@ -75,7 +76,7 @@ async function loadAvailableStudies() {
         }));
 
         updateDashboardStats();
-        console.log(`Loaded ${allStudies.length} total studies`);
+        console.log(`Loaded ${allStudies.length} ready studies`);
     } catch (error) {
         console.error('Error loading studies:', error);
         throw error;
@@ -83,81 +84,127 @@ async function loadAvailableStudies() {
 }
 
 function updateDashboardStats() {
-    const completed = allStudies.filter(s => s.annotation_status === 'completed').length;
-    const available = allStudies.filter(s => s.annotation_status === 'pending').length;
+    const user = firebase.auth().currentUser;
+    if (!user) return;
+
+    // Count user's completed annotations
+    firebase.firestore()
+        .collection('annotations')
+        .where('userId', '==', user.uid)
+        .get()
+        .then(snapshot => {
+            const yourReviews = snapshot.docs.length;
+            document.getElementById('yourReviews').textContent = yourReviews;
+        });
+
+    // Total and available stats
+    const total = allStudies.length;
+    document.getElementById('totalStudies').textContent = total;
+    document.getElementById('availableStudies').textContent = total;
     
-    document.getElementById('completedStudies').textContent = completed;
-    document.getElementById('availableStudies').textContent = available;
-    document.getElementById('totalStudies').textContent = allStudies.length;
+    // Note: We'll update completed count after loading user progress
 }
 
 async function loadNextStudy() {
-    // Find first pending study
-    const nextStudy = allStudies.find(s => s.annotation_status === 'pending');
+    const user = firebase.auth().currentUser;
+    if (!user) return;
+
+    // Get user's progress to filter out completed/skipped studies
+    const progressDoc = await firebase.firestore()
+        .collection('user_progress')
+        .doc(user.uid)
+        .get();
+    
+    const userProgress = progressDoc.exists ? progressDoc.data() : { annotations: {}, skippedStudies: [] };
+
+    // Find first study not yet annotated or skipped by this user
+    const nextStudy = allStudies.find(s => 
+        !userProgress.annotations?.[s.study_id] && 
+        !userProgress.skippedStudies?.includes(s.study_id)
+    );
     
     if (!nextStudy) {
         showMessage('All studies have been annotated! 🎉');
         return;
     }
 
-    await loadStudy(nextStudy);
+    await loadStudy(nextStudy, userProgress);
 }
 
 // =============================================================================
-// CRITICAL: STUDY LOADING WITH PROPER DISPLAY SEQUENCE
+// CRITICAL: STUDY LOADING WITH PROPER DOWNLOAD SEQUENCE
 // =============================================================================
-async function loadStudy(study) {
-    console.log(`Loading study: ${study.id}`);
+async function loadStudy(study, userProgress) {
+    console.log(`Loading study: ${study.study_id}`);
     currentStudy = study;
 
     // Update UI
-    document.getElementById('currentStudyId').textContent = study.id;
-    document.getElementById('loadingStatus').textContent = 'Loading DICOM files from Firebase Storage...';
-    document.getElementById('loadingMessage').style.display = 'flex';
+    document.getElementById('currentStudyId').textContent = study.study_id;
+    
+    const loadingEl = document.getElementById('loadingMessage');
+    const loadingStatus = document.getElementById('loadingStatus');
+    
+    loadingStatus.textContent = 'Preparing study...';
+    loadingEl.style.display = 'flex';
     document.getElementById('dualViewContainer').style.display = 'none';
 
     try {
-        // Fetch file URLs from Firebase Storage
-        const axialUrls = await fetchSeriesUrls(study.storage_path, 'axial');
-        const sagittalUrls = await fetchSeriesUrls(study.storage_path, 'sagittal');
+        // Find axial and sagittal series (matching your original logic)
+        const axialSeries = study.series.find(s => 
+            s.description.toLowerCase().includes('ax')
+        );
+        const sagittalSeries = study.series.find(s => 
+            s.description.toLowerCase().includes('sag')
+        );
+        
+        // Fallback to first series if not found
+        const finalAxial = axialSeries || study.series[0];
+        const finalSagittal = sagittalSeries || (study.series[1] || study.series[0]);
 
-        console.log(`Fetched ${axialUrls.length} axial + ${sagittalUrls.length} sagittal URLs`);
-
-        if (axialUrls.length === 0 || sagittalUrls.length === 0) {
-            throw new Error('Missing series data in storage');
+        if (!finalAxial || !finalSagittal) {
+            throw new Error('Missing required series (axial or sagittal)');
         }
+
+        // Download files with progress callbacks
+        console.log('Downloading axial series...');
+        const axialFiles = await fetchSeriesFiles(study.study_id, finalAxial, 'axial');
+        
+        console.log('Downloading sagittal series...');
+        const sagittalFiles = await fetchSeriesFiles(study.study_id, finalSagittal, 'sagittal');
+
+        console.log(`Downloaded ${axialFiles.length} axial + ${sagittalFiles.length} sagittal files`);
 
         // =========================================================================
         // CRITICAL SEQUENCE: Display container FIRST, then load images
         // =========================================================================
         
-        // STEP 1: Show the container with display:grid
-        document.getElementById('loadingMessage').style.display = 'none';
+        loadingStatus.textContent = 'Loading images into viewer...';
+        
+        // STEP 1: Hide loading, show container with display:grid
+        loadingEl.style.display = 'none';
         document.getElementById('dualViewContainer').style.display = 'grid';
         
-        // STEP 2: Small delay to ensure layout renders and containers have dimensions
+        // STEP 2: Small delay to ensure layout renders
         await new Promise(resolve => setTimeout(resolve, 100));
         
-        // STEP 3: Verify containers have dimensions
-        const axialRect = document.getElementById('axialViewer').getBoundingClientRect();
-        const sagittalRect = document.getElementById('sagittalViewer').getBoundingClientRect();
+        // STEP 3: Load images into the now-visible viewer
+        await dicomViewer.loadDualSeries(axialFiles, sagittalFiles);
         
-        console.log('Verified dimensions - Axial:', axialRect.width, 'x', axialRect.height);
-        console.log('Verified dimensions - Sagittal:', sagittalRect.width, 'x', sagittalRect.height);
-        
-        if (axialRect.width === 0 || axialRect.height === 0 || 
-            sagittalRect.width === 0 || sagittalRect.height === 0) {
-            throw new Error('Viewer containers still have no dimensions after display');
+        // STEP 4: Force resize to ensure proper dimensions
+        if (typeof dicomViewer.resize === 'function') {
+            dicomViewer.resize();
         }
-        
-        // STEP 4: NOW load the images (containers are visible and have dimensions)
-        console.log('Loading images into visible containers...');
-        await dicomViewer.loadDualSeries(axialUrls, sagittalUrls);
         
         console.log('✓ Study loaded successfully');
         
         // Reset form
         document.getElementById('annotationForm').reset();
+        
+        // Update stats with user progress
+        if (userProgress) {
+            const completedCount = Object.keys(userProgress.annotations || {}).length;
+            document.getElementById('completedStudies').textContent = completedCount;
+        }
         
     } catch (error) {
         console.error('❌ Error loading study:', error);
@@ -165,44 +212,58 @@ async function loadStudy(study) {
         
         // Revert to loading state
         document.getElementById('dualViewContainer').style.display = 'none';
-        document.getElementById('loadingMessage').style.display = 'flex';
+        loadingEl.style.display = 'flex';
+        loadingStatus.textContent = 'Error loading study. Please try again.';
     }
 }
 
 // =============================================================================
-// FIREBASE STORAGE HELPERS
+// FILE DOWNLOAD WITH PROGRESS (Using storageManager)
 // =============================================================================
-async function fetchSeriesUrls(storagePath, seriesName) {
-    try {
-        const storageRef = firebase.storage().ref();
-        const seriesPath = `${storagePath}/${seriesName}`;
-        const seriesRef = storageRef.child(seriesPath);
-        
-        console.log(`Fetching files from: ${seriesPath}`);
-        
-        const result = await seriesRef.listAll();
-        
-        if (result.items.length === 0) {
-            console.warn(`No files found in ${seriesPath}`);
-            return [];
-        }
+async function fetchSeriesFiles(studyId, series, seriesType) {
+    // Determine filenames based on series data structure
+    let filenames = [];
+    
+    if (series.files && Array.isArray(series.files)) {
+        // If series has explicit file list
+        filenames = series.files.map(f => f.filename);
+    } else if (series.slice_count) {
+        // If series has slice count, generate filenames
+        filenames = Array.from(
+            { length: series.slice_count }, 
+            (_, i) => `${i + 1}.dcm`
+        );
+    } else {
+        // Fallback: try common naming patterns
+        console.warn(`No file list or slice_count for ${seriesType} series, using fallback`);
+        filenames = Array.from({ length: 50 }, (_, i) => `${i + 1}.dcm`);
+    }
 
-        // Get download URLs for all files
-        const urlPromises = result.items.map(item => item.getDownloadURL());
-        const urls = await Promise.all(urlPromises);
-        
-        // Sort URLs by filename (assumes numeric naming like 001.dcm, 002.dcm)
-        urls.sort((a, b) => {
-            const fileA = a.split('/').pop().split('?')[0];
-            const fileB = b.split('/').pop().split('?')[0];
-            return fileA.localeCompare(fileB, undefined, { numeric: true });
-        });
-        
-        console.log(`✓ Fetched ${urls.length} files from ${seriesName}`);
-        return urls;
-        
+    console.log(`Fetching ${filenames.length} files for ${seriesType} series...`);
+
+    // Update progress callback
+    const progressCallback = (current, total) => {
+        const loadingStatus = document.getElementById('loadingStatus');
+        if (loadingStatus) {
+            const seriesName = series.description || seriesType;
+            loadingStatus.textContent = `Downloading ${seriesName}: ${current}/${total}`;
+        }
+    };
+
+    try {
+        // Use storageManager to download files (this should be defined in storage.js)
+        const files = await storageManager.downloadSeries(
+            studyId, 
+            series.series_id, 
+            filenames, 
+            progressCallback
+        );
+
+        console.log(`✓ Downloaded ${files.length} files for ${seriesType}`);
+        return files;
+
     } catch (error) {
-        console.error(`Error fetching ${seriesName} series:`, error);
+        console.error(`Error downloading ${seriesType} series:`, error);
         throw error;
     }
 }
@@ -210,49 +271,70 @@ async function fetchSeriesUrls(storagePath, seriesName) {
 // =============================================================================
 // ANNOTATION SUBMISSION
 // =============================================================================
-async function submitAnnotation(formData) {
+async function submitAnnotation() {
     if (!currentStudy) {
         showError('No study loaded');
         return;
     }
 
-    console.log('Submitting annotation for study:', currentStudy.id);
+    const form = document.getElementById('annotationForm');
+    const formData = new FormData(form);
+    
+    const castellviType = formData.get('castellvi_type');
+    const confidence = formData.get('confidence');
+    const notes = formData.get('notes') || '';
+
+    if (!castellviType || !confidence) {
+        showError('Please select both Type and Confidence');
+        return;
+    }
+
+    console.log('Submitting annotation for study:', currentStudy.study_id);
 
     try {
         const user = firebase.auth().currentUser;
         
+        // Get current slice positions
+        const slices = dicomViewer.getCurrentSlices();
+        
         const annotationData = {
-            study_id: currentStudy.id,
-            annotator_id: user.uid,
-            annotator_email: user.email,
-            castellvi_type: formData.castellvi_type,
-            confidence: formData.confidence,
-            notes: formData.notes || '',
-            timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-            axial_slice: dicomViewer.currentAxialIndex,
-            sagittal_slice: dicomViewer.currentSagittalIndex
+            studyId: currentStudy.study_id,
+            userId: user.uid,
+            userEmail: user.email,
+            castellvi_type: castellviType,
+            confidence: confidence,
+            notes: notes,
+            slices: slices,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp()
         };
 
-        // Save to Firestore
+        // Save annotation
         await firebase.firestore()
             .collection('annotations')
             .add(annotationData);
 
-        // Update study status
-        await firebase.firestore()
-            .collection('studies')
-            .doc(currentStudy.id)
-            .update({
-                annotation_status: 'completed',
-                completed_at: firebase.firestore.FieldValue.serverTimestamp()
-            });
+        // Update user progress
+        const progressRef = firebase.firestore()
+            .collection('user_progress')
+            .doc(user.uid);
+        
+        const progressDoc = await progressRef.get();
+        const currentProgress = progressDoc.exists ? progressDoc.data() : { annotations: {}, skippedStudies: [] };
+        
+        if (!currentProgress.annotations) {
+            currentProgress.annotations = {};
+        }
+        currentProgress.annotations[currentStudy.study_id] = true;
+        
+        await progressRef.set(currentProgress, { merge: true });
 
         console.log('✓ Annotation submitted successfully');
         showMessage('Annotation saved! Loading next study...', 'success');
 
-        // Reload studies and load next one
-        await loadAvailableStudies();
+        // Update stats
+        updateDashboardStats();
         
+        // Load next study
         setTimeout(async () => {
             await loadNextStudy();
         }, 1500);
@@ -266,22 +348,28 @@ async function submitAnnotation(formData) {
 async function skipStudy() {
     if (!currentStudy) return;
 
-    console.log('Skipping study:', currentStudy.id);
+    console.log('Skipping study:', currentStudy.study_id);
 
     try {
-        // Mark as skipped
-        await firebase.firestore()
-            .collection('studies')
-            .doc(currentStudy.id)
-            .update({
-                annotation_status: 'skipped',
-                skipped_at: firebase.firestore.FieldValue.serverTimestamp(),
-                skipped_by: firebase.auth().currentUser.uid
-            });
+        const user = firebase.auth().currentUser;
+        
+        // Update user progress to mark as skipped
+        const progressRef = firebase.firestore()
+            .collection('user_progress')
+            .doc(user.uid);
+        
+        const progressDoc = await progressRef.get();
+        const currentProgress = progressDoc.exists ? progressDoc.data() : { annotations: {}, skippedStudies: [] };
+        
+        if (!currentProgress.skippedStudies) {
+            currentProgress.skippedStudies = [];
+        }
+        currentProgress.skippedStudies.push(currentStudy.study_id);
+        
+        await progressRef.set(currentProgress, { merge: true });
 
         showMessage('Study skipped. Loading next...', 'info');
         
-        await loadAvailableStudies();
         setTimeout(async () => {
             await loadNextStudy();
         }, 1000);
@@ -299,19 +387,7 @@ function setupEventListeners() {
     // Annotation form submission
     document.getElementById('annotationForm').addEventListener('submit', async (e) => {
         e.preventDefault();
-        
-        const formData = {
-            castellvi_type: document.querySelector('input[name="castellvi_type"]:checked')?.value,
-            confidence: document.querySelector('input[name="confidence"]:checked')?.value,
-            notes: document.getElementById('notes').value
-        };
-
-        if (!formData.castellvi_type || !formData.confidence) {
-            showError('Please select both Type and Confidence');
-            return;
-        }
-
-        await submitAnnotation(formData);
+        await submitAnnotation();
     });
 
     // Skip button
@@ -323,7 +399,9 @@ function setupEventListeners() {
 
     // Reset windowing button
     document.getElementById('resetWindowing').addEventListener('click', () => {
-        dicomViewer.resetWindowing();
+        if (dicomViewer) {
+            dicomViewer.resetWindowLevel();
+        }
     });
 
     // Sign out button
@@ -377,12 +455,10 @@ function showError(message) {
 // =============================================================================
 window.addEventListener('error', (event) => {
     console.error('Global error:', event.error);
-    showError('An unexpected error occurred. Check console for details.');
 });
 
 window.addEventListener('unhandledrejection', (event) => {
     console.error('Unhandled promise rejection:', event.reason);
-    showError('An unexpected error occurred. Check console for details.');
 });
 
 console.log('✓ app_dual.js loaded successfully');
