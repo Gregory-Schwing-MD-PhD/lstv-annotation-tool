@@ -237,16 +237,12 @@ body {
     height: 600px;
     background-color: #000;
     border-radius: 4px;
-    display: none;
-    position: relative;
+    position: relative;  /* CRITICAL: Must be relative for Cornerstone */
     overflow: hidden;
+    /* REMOVED display: none - this was killing the viewer */
 }
 
-.dicom-viewer.active {
-    display: block !important;
-}
-
-/* CRITICAL: Force Cornerstone canvas to render */
+/* Force Cornerstone canvas to fill container */
 .dicom-viewer canvas {
     width: 100% !important;
     height: 100% !important;

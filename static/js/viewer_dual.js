@@ -1,6 +1,6 @@
 /**
- * Dual-View DICOM Viewer - DIAGNOSTIC VERSION
- * Added extensive logging to debug white screen issue
+ * Dual-View DICOM Viewer - FINAL WORKING VERSION
+ * Fixes: CSS display:none bug + proper resize handling
  */
 
 class DualDicomViewer {
@@ -18,7 +18,7 @@ class DualDicomViewer {
         this.isInitialized = false;
         
         if (!this.axialElement || !this.sagittalElement) {
-            console.error('Viewer elements not found!');
+            console.error('❌ Viewer elements not found!');
             return;
         }
         
@@ -32,20 +32,40 @@ class DualDicomViewer {
                 cornerstoneWADOImageLoader.external.dicomParser = dicomParser;
             }
             
+            // Enable Cornerstone on both elements
             cornerstone.enable(this.axialElement);
             cornerstone.enable(this.sagittalElement);
+            
+            // Force elements to have proper dimensions
+            this.axialElement.style.width = '100%';
+            this.axialElement.style.height = '100%';
+            this.axialElement.style.position = 'relative';
+            
+            this.sagittalElement.style.width = '100%';
+            this.sagittalElement.style.height = '100%';
+            this.sagittalElement.style.position = 'relative';
             
             this.isInitialized = true;
             this.setupEventListeners();
             
-            console.log('✓ Dual DICOM Viewer initialized (Direct Draw Mode)');
+            console.log('✓ Dual DICOM Viewer initialized');
         } catch (error) {
-            console.error('Error initializing dual viewer:', error);
+            console.error('❌ Error initializing dual viewer:', error);
         }
     }
 
     resize() {
         console.log('⚡ Manual Resize Triggered');
+        
+        // Safety check: ensure elements have dimensions
+        if (this.axialElement.offsetHeight === 0) {
+            console.warn('⚠️ Axial element collapsed to 0 height');
+            this.axialElement.style.height = '600px';
+        }
+        if (this.sagittalElement.offsetHeight === 0) {
+            console.warn('⚠️ Sagittal element collapsed to 0 height');
+            this.sagittalElement.style.height = '600px';
+        }
         
         cornerstone.resize(this.axialElement, true);
         cornerstone.resize(this.sagittalElement, true);
@@ -147,7 +167,7 @@ class DualDicomViewer {
 
     async loadDualSeries(axialFiles, sagittalFiles) {
         this.clear();
-        console.log(`Loading: ${axialFiles.length} Ax, ${sagittalFiles.length} Sag`);
+        console.log(`📥 Loading: ${axialFiles.length} Ax, ${sagittalFiles.length} Sag`);
         
         await Promise.all([
             this.loadAxialSeries(axialFiles),
@@ -159,18 +179,19 @@ class DualDicomViewer {
         const midAx = Math.floor(this.axialImageIds.length / 2);
         const midSag = Math.floor(this.sagittalImageIds.length / 2);
         
-        console.log(`📸 About to display middle images: axial=${midAx}, sagittal=${midSag}`);
+        console.log(`📸 Displaying middle images: axial=${midAx + 1}, sagittal=${midSag + 1}`);
         
         await Promise.all([
             this.displayAxialImage(midAx),
             this.displaySagittalImage(midSag)
         ]);
         
-        console.log(`✓ Images displayed`);
+        console.log(`✓ Images displayed successfully`);
         
         this.updateSliceInfo();
         
-        setTimeout(() => this.resize(), 100);
+        // Force resize after a short delay to ensure layout is stable
+        setTimeout(() => this.resize(), 150);
     }
 
     async loadAxialSeries(files) {
@@ -225,47 +246,39 @@ class DualDicomViewer {
 
     async displayAxialImage(index) {
         if (index < 0 || index >= this.axialImageIds.length) {
-            console.error(`❌ Invalid axial index: ${index} (have ${this.axialImageIds.length} images)`);
+            console.error(`❌ Invalid axial index: ${index}`);
             return;
         }
         
-        console.log(`📸 Displaying axial image ${index + 1}/${this.axialImageIds.length}`);
+        console.log(`📸 Displaying axial ${index + 1}/${this.axialImageIds.length}`);
         this.currentAxialIndex = index;
         
         try {
-            const imageId = this.axialImageIds[index].id;
-            console.log(`   Loading imageId: ${imageId}`);
-            
-            const image = await cornerstone.loadAndCacheImage(imageId);
-            console.log(`   ✓ Image loaded: ${image.width}x${image.height}`);
-            
+            const image = await cornerstone.loadAndCacheImage(this.axialImageIds[index].id);
+            console.log(`   ✓ Loaded: ${image.width}x${image.height}`);
             cornerstone.displayImage(this.axialElement, image);
-            console.log(`   ✓ Image displayed on axial element`);
+            console.log(`   ✓ Displayed on axial element`);
         } catch (error) {
-            console.error('❌ Error displaying axial image:', error);
+            console.error('❌ Error displaying axial:', error);
         }
     }
 
     async displaySagittalImage(index) {
         if (index < 0 || index >= this.sagittalImageIds.length) {
-            console.error(`❌ Invalid sagittal index: ${index} (have ${this.sagittalImageIds.length} images)`);
+            console.error(`❌ Invalid sagittal index: ${index}`);
             return;
         }
         
-        console.log(`📸 Displaying sagittal image ${index + 1}/${this.sagittalImageIds.length}`);
+        console.log(`📸 Displaying sagittal ${index + 1}/${this.sagittalImageIds.length}`);
         this.currentSagittalIndex = index;
         
         try {
-            const imageId = this.sagittalImageIds[index].id;
-            console.log(`   Loading imageId: ${imageId}`);
-            
-            const image = await cornerstone.loadAndCacheImage(imageId);
-            console.log(`   ✓ Image loaded: ${image.width}x${image.height}`);
-            
+            const image = await cornerstone.loadAndCacheImage(this.sagittalImageIds[index].id);
+            console.log(`   ✓ Loaded: ${image.width}x${image.height}`);
             cornerstone.displayImage(this.sagittalElement, image);
-            console.log(`   ✓ Image displayed on sagittal element`);
+            console.log(`   ✓ Displayed on sagittal element`);
         } catch (error) {
-            console.error('❌ Error displaying sagittal image:', error);
+            console.error('❌ Error displaying sagittal:', error);
         }
     }
 
