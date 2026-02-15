@@ -1,6 +1,6 @@
 /**
- * Dual-View DICOM Viewer - STABLE DIRECT-DRAW VERSION
- * Fixes: Decoding workers, Viewport initialization, and Resize Race Conditions.
+ * Dual-View DICOM Viewer - LAYOUT FIX
+ * Fixes: Respects original CSS sizes while preventing 0px collapse.
  */
 
 class DualDicomViewer {
@@ -31,7 +31,6 @@ class DualDicomViewer {
                 cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
                 cornerstoneWADOImageLoader.external.dicomParser = dicomParser;
                 
-                // Initialize Web Workers - CRITICAL for decoding images
                 const config = {
                     maxWebWorkers: navigator.hardwareConcurrency || 4,
                     startWebWorkersOnDemand: true,
@@ -48,7 +47,7 @@ class DualDicomViewer {
             this.isInitialized = true;
             this.setupEventListeners();
             
-            console.log('✓ Dual DICOM Viewer initialized (Hybrid Mode)');
+            console.log('✓ Dual DICOM Viewer initialized');
         } catch (error) {
             console.error('❌ Error initializing dual viewer:', error);
         }
@@ -57,9 +56,16 @@ class DualDicomViewer {
     resize() {
         console.log('⚡ Manual Resize Triggered');
         
-        // Force height via JS to be 100% sure
-        this.axialElement.style.height = '600px';
-        this.sagittalElement.style.height = '600px';
+        /**
+         * BUG FIX: Removed forced 600px. 
+         * We only set a height if the element is literally 0px.
+         */
+        if (this.axialElement.offsetHeight === 0) {
+            this.axialElement.style.minHeight = '400px'; 
+        }
+        if (this.sagittalElement.offsetHeight === 0) {
+            this.sagittalElement.style.minHeight = '400px';
+        }
 
         cornerstone.resize(this.axialElement, true);
         cornerstone.resize(this.sagittalElement, true);
@@ -81,7 +87,6 @@ class DualDicomViewer {
             e.deltaY < 0 ? this.previousSagittalImage() : this.nextSagittalImage();
         });
 
-        // Use requestAnimationFrame to ensure crosshair draws AFTER image
         this.axialElement.addEventListener('cornerstoneimagerendered', () => {
             requestAnimationFrame(() => {
                 const canvas = this.axialElement.querySelector('canvas');
@@ -120,8 +125,10 @@ class DualDicomViewer {
             startX = e.clientX;
             startY = e.clientY;
             const vp = cornerstone.getViewport(element);
-            startWL = vp.voi.windowCenter;
-            startWW = vp.voi.windowWidth;
+            if (vp) {
+                startWL = vp.voi.windowCenter;
+                startWW = vp.voi.windowWidth;
+            }
         });
 
         document.addEventListener('mousemove', (e) => {
@@ -129,9 +136,11 @@ class DualDicomViewer {
             const deltaX = e.clientX - startX;
             const deltaY = e.clientY - startY;
             const vp = cornerstone.getViewport(element);
-            vp.voi.windowCenter = startWL + deltaY;
-            vp.voi.windowWidth = Math.max(1, startWW + deltaX);
-            cornerstone.setViewport(element, vp);
+            if (vp) {
+                vp.voi.windowCenter = startWL + deltaY;
+                vp.voi.windowWidth = Math.max(1, startWW + deltaX);
+                cornerstone.setViewport(element, vp);
+            }
         });
 
         document.addEventListener('mouseup', () => isDragging = false);
@@ -158,7 +167,6 @@ class DualDicomViewer {
     async loadDualSeries(axialFiles, sagittalFiles) {
         this.clear();
         
-        // Parallel load metadata
         await Promise.all([
             this.loadAxialSeries(axialFiles),
             this.loadSagittalSeries(sagittalFiles)
@@ -167,13 +175,10 @@ class DualDicomViewer {
         const midAx = Math.floor(this.axialImageIds.length / 2);
         const midSag = Math.floor(this.sagittalImageIds.length / 2);
         
-        // Sequence display to ensure canvas context is stable
         await this.displayAxialImage(midAx);
         await this.displaySagittalImage(midSag);
         
         this.updateSliceInfo();
-        
-        // Force the layout to snap into place
         setTimeout(() => this.resize(), 200);
     }
 
