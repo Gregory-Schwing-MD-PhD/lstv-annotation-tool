@@ -90,15 +90,12 @@ class LSTVDualAnnotationApp {
         this.currentStudy = study;
         document.getElementById('currentStudyId').textContent = study.study_id;
         
-        // Show Loading
         const loadingEl = document.getElementById('loadingMessage');
         loadingEl.style.display = 'flex';
         
-        // ⚠️ CRITICAL: Show the container NOW so it has height when JS runs
+        // 1. Show the container IMMEDIATELY so it has width/height for Cornerstone
         const container = document.getElementById('dualViewContainer');
         container.style.display = 'grid'; 
-        container.style.visibility = 'visible';
-        container.style.opacity = '1';
 
         try {
             const axSeries = study.series.find(s => s.description.toLowerCase().includes('ax'));
@@ -112,9 +109,12 @@ class LSTVDualAnnotationApp {
 
             await dicomViewer.loadDualSeries(axFiles, sagFiles);
 
-            // Hide Loading once pixels are drawn
             loadingEl.style.display = 'none';
-            dicomViewer.resize();
+            
+            // 2. Trigger the manual resize logic
+            if (dicomViewer && typeof dicomViewer.resize === 'function') {
+                dicomViewer.resize();
+            }
 
         } catch (error) {
             console.error(error);
@@ -132,13 +132,11 @@ class LSTVDualAnnotationApp {
             filenames = ['1.dcm', '2.dcm', '3.dcm']; 
         }
 
+        // Updated with progress callback logic
         return await storageManager.downloadSeries(studyId, series.series_id, filenames, (current, total) => {
             const loadingEl = document.getElementById('loadingMessage');
-            if (!loadingEl) return;
-            
             const text = `Downloading ${series.description || 'series'}: ${current}/${total}`;
             const span = loadingEl.querySelector('span');
-            
             if (span) span.textContent = text;
             else loadingEl.textContent = text;
         });
