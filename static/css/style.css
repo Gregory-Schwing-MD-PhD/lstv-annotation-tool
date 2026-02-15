@@ -232,14 +232,13 @@ body {
 
 /* ===== CRITICAL FIX FOR BLACK BOX ===== */
 .dicom-viewer {
-    width: 100%;
-    min-height: 600px;
-    height: 600px;
+    /* Remove fixed width/height - let images dictate size */
+    max-width: 100%;
     background-color: #000;
     border-radius: 4px;
-    position: relative;  /* CRITICAL: Must be relative for Cornerstone */
-    overflow: hidden;
-    /* REMOVED display: none - this was killing the viewer */
+    position: relative;
+    overflow: auto; /* Add scrollbars if image is huge */
+    display: inline-block; /* Shrink to fit content */
 }
 
 /* Force Cornerstone canvas to fill container */

@@ -1,6 +1,6 @@
 /**
- * Dual-View DICOM Viewer - FINAL WORKING VERSION
- * Fixes: CSS display:none bug + proper resize handling
+ * Dual-View DICOM Viewer - NATIVE RESOLUTION VERSION
+ * Renders images at 1:1 pixel ratio - no scaling issues
  */
 
 class DualDicomViewer {
@@ -32,44 +32,27 @@ class DualDicomViewer {
                 cornerstoneWADOImageLoader.external.dicomParser = dicomParser;
             }
             
-            // Enable Cornerstone on both elements
+            // Enable Cornerstone
             cornerstone.enable(this.axialElement);
             cornerstone.enable(this.sagittalElement);
             
-            // Force elements to have proper dimensions
-            this.axialElement.style.width = '100%';
-            this.axialElement.style.height = '100%';
+            // Remove fixed dimensions - let images dictate size
             this.axialElement.style.position = 'relative';
-            
-            this.sagittalElement.style.width = '100%';
-            this.sagittalElement.style.height = '100%';
             this.sagittalElement.style.position = 'relative';
             
             this.isInitialized = true;
             this.setupEventListeners();
             
-            console.log('✓ Dual DICOM Viewer initialized');
+            console.log('✓ Dual DICOM Viewer initialized (Native Resolution Mode)');
         } catch (error) {
             console.error('❌ Error initializing dual viewer:', error);
         }
     }
 
     resize() {
-        console.log('⚡ Manual Resize Triggered');
-        
-        // Safety check: ensure elements have dimensions
-        if (this.axialElement.offsetHeight === 0) {
-            console.warn('⚠️ Axial element collapsed to 0 height');
-            this.axialElement.style.height = '600px';
-        }
-        if (this.sagittalElement.offsetHeight === 0) {
-            console.warn('⚠️ Sagittal element collapsed to 0 height');
-            this.sagittalElement.style.height = '600px';
-        }
-        
-        cornerstone.resize(this.axialElement, true);
-        cornerstone.resize(this.sagittalElement, true);
-
+        console.log('⚡ Resize triggered (no-op in native mode)');
+        // In native resolution mode, we don't resize images
+        // Just trigger a redraw
         if (this.axialImageIds.length) {
             cornerstone.updateImage(this.axialElement);
             cornerstone.updateImage(this.sagittalElement);
@@ -102,8 +85,6 @@ class DualDicomViewer {
                 this.drawCrosshairOnSagittal(ctx);
             }
         });
-        
-        window.addEventListener('resize', () => this.resize());
         
         document.addEventListener('keydown', (e) => {
             if (this.axialImageIds.length === 0) return;
@@ -162,6 +143,7 @@ class DualDicomViewer {
         const mmX = dx * rowX + dy * rowY + dz * rowZ;
         const mmY = dx * colX + dy * colY + dz * colZ;
 
+        // Return pixel coordinates (column, row)
         return { x: mmX / colSpacing, y: mmY / rowSpacing };
     }
 
@@ -174,24 +156,19 @@ class DualDicomViewer {
             this.loadSagittalSeries(sagittalFiles)
         ]);
 
-        console.log(`✓ Metadata loaded: ${this.axialImageIds.length} axial, ${this.sagittalImageIds.length} sagittal`);
+        console.log(`✓ Metadata loaded`);
 
         const midAx = Math.floor(this.axialImageIds.length / 2);
         const midSag = Math.floor(this.sagittalImageIds.length / 2);
-        
-        console.log(`📸 Displaying middle images: axial=${midAx + 1}, sagittal=${midSag + 1}`);
         
         await Promise.all([
             this.displayAxialImage(midAx),
             this.displaySagittalImage(midSag)
         ]);
         
-        console.log(`✓ Images displayed successfully`);
+        console.log(`✓ Images displayed at native resolution`);
         
         this.updateSliceInfo();
-        
-        // Force resize after a short delay to ensure layout is stable
-        setTimeout(() => this.resize(), 150);
     }
 
     async loadAxialSeries(files) {
@@ -245,38 +222,50 @@ class DualDicomViewer {
     }
 
     async displayAxialImage(index) {
-        if (index < 0 || index >= this.axialImageIds.length) {
-            console.error(`❌ Invalid axial index: ${index}`);
-            return;
-        }
+        if (index < 0 || index >= this.axialImageIds.length) return;
         
-        console.log(`📸 Displaying axial ${index + 1}/${this.axialImageIds.length}`);
         this.currentAxialIndex = index;
         
         try {
             const image = await cornerstone.loadAndCacheImage(this.axialImageIds[index].id);
-            console.log(`   ✓ Loaded: ${image.width}x${image.height}`);
-            cornerstone.displayImage(this.axialElement, image);
-            console.log(`   ✓ Displayed on axial element`);
+            
+            // Set viewport to native resolution (scale = 1.0)
+            const viewport = cornerstone.getDefaultViewportForImage(this.axialElement, image);
+            viewport.scale = 1.0; // Native 1:1 pixel ratio
+            viewport.translation = { x: 0, y: 0 };
+            
+            cornerstone.displayImage(this.axialElement, image, viewport);
+            
+            // Resize element to match image
+            this.axialElement.style.width = image.width + 'px';
+            this.axialElement.style.height = image.height + 'px';
+            
+            console.log(`✓ Axial ${index + 1}: ${image.width}x${image.height} at 1:1`);
         } catch (error) {
             console.error('❌ Error displaying axial:', error);
         }
     }
 
     async displaySagittalImage(index) {
-        if (index < 0 || index >= this.sagittalImageIds.length) {
-            console.error(`❌ Invalid sagittal index: ${index}`);
-            return;
-        }
+        if (index < 0 || index >= this.sagittalImageIds.length) return;
         
-        console.log(`📸 Displaying sagittal ${index + 1}/${this.sagittalImageIds.length}`);
         this.currentSagittalIndex = index;
         
         try {
             const image = await cornerstone.loadAndCacheImage(this.sagittalImageIds[index].id);
-            console.log(`   ✓ Loaded: ${image.width}x${image.height}`);
-            cornerstone.displayImage(this.sagittalElement, image);
-            console.log(`   ✓ Displayed on sagittal element`);
+            
+            // Set viewport to native resolution (scale = 1.0)
+            const viewport = cornerstone.getDefaultViewportForImage(this.sagittalElement, image);
+            viewport.scale = 1.0; // Native 1:1 pixel ratio
+            viewport.translation = { x: 0, y: 0 };
+            
+            cornerstone.displayImage(this.sagittalElement, image, viewport);
+            
+            // Resize element to match image
+            this.sagittalElement.style.width = image.width + 'px';
+            this.sagittalElement.style.height = image.height + 'px';
+            
+            console.log(`✓ Sagittal ${index + 1}: ${image.width}x${image.height} at 1:1`);
         } catch (error) {
             console.error('❌ Error displaying sagittal:', error);
         }
@@ -291,19 +280,26 @@ class DualDicomViewer {
         const proj = this.projectPointToSlice(sagMeta.position, axMeta);
         
         if (proj) {
-            const canvasPoint = cornerstone.pixelToCanvas(this.axialElement, { x: proj.x, y: proj.y });
-            const width = this.axialElement.clientWidth;
+            // At 1:1 scale, pixel coords = canvas coords
+            const pixelX = proj.x;
+            const pixelY = proj.y;
             
-            if (canvasPoint.x >= 0 && canvasPoint.x <= width) {
+            const width = axMeta.columns;
+            const height = axMeta.rows;
+            
+            // Draw vertical line if X is in bounds
+            if (pixelX >= 0 && pixelX <= width) {
                 ctx.save();
                 ctx.beginPath();
                 ctx.strokeStyle = '#00ff00';
                 ctx.lineWidth = 2;
                 ctx.setLineDash([5, 5]);
-                ctx.moveTo(canvasPoint.x, 0);
-                ctx.lineTo(canvasPoint.x, this.axialElement.clientHeight);
+                ctx.moveTo(pixelX, 0);
+                ctx.lineTo(pixelX, height);
                 ctx.stroke();
                 ctx.restore();
+                
+                console.log(`✓ Axial crosshair at X=${pixelX.toFixed(1)}`);
             }
         }
     }
@@ -317,19 +313,26 @@ class DualDicomViewer {
         const proj = this.projectPointToSlice(axMeta.position, sagMeta);
         
         if (proj) {
-            const canvasPoint = cornerstone.pixelToCanvas(this.sagittalElement, { x: proj.x, y: proj.y });
-            const height = this.sagittalElement.clientHeight;
+            // At 1:1 scale, pixel coords = canvas coords
+            const pixelX = proj.x;
+            const pixelY = proj.y;
             
-            if (canvasPoint.y >= 0 && canvasPoint.y <= height) {
+            const width = sagMeta.columns;
+            const height = sagMeta.rows;
+            
+            // Draw horizontal line if Y is in bounds
+            if (pixelY >= 0 && pixelY <= height) {
                 ctx.save();
                 ctx.beginPath();
                 ctx.strokeStyle = '#00ff00';
                 ctx.lineWidth = 2;
                 ctx.setLineDash([5, 5]);
-                ctx.moveTo(0, canvasPoint.y);
-                ctx.lineTo(this.sagittalElement.clientWidth, canvasPoint.y);
+                ctx.moveTo(0, pixelY);
+                ctx.lineTo(width, pixelY);
                 ctx.stroke();
                 ctx.restore();
+                
+                console.log(`✓ Sagittal crosshair at Y=${pixelY.toFixed(1)}`);
             }
         }
     }
@@ -376,8 +379,16 @@ class DualDicomViewer {
     }
 
     resetWindowLevel() {
-        cornerstone.reset(this.axialElement);
-        cornerstone.reset(this.sagittalElement);
+        try {
+            cornerstone.reset(this.axialElement);
+            cornerstone.reset(this.sagittalElement);
+            
+            // Re-apply native resolution after reset
+            if (this.axialImageIds.length) {
+                this.displayAxialImage(this.currentAxialIndex);
+                this.displaySagittalImage(this.currentSagittalIndex);
+            }
+        } catch(e) {}
     }
     
     getCurrentSlices() {
