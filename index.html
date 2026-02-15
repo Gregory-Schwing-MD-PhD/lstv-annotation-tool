@@ -4,23 +4,40 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LSTV Annotation Tool - Dual View</title>
-    
-    <!-- CSS -->
+
     <link rel="stylesheet" href="static/css/style.css">
-    
+    <style>
+        /* Layout Guard: Ensures containers have space before JS initialization */
+        .dicom-viewer {
+            background-color: #1a1a1a;
+            border-radius: 4px;
+            position: relative;
+            overflow: hidden;
+            display: block !important;
+            min-height: 512px;
+            min-width: 320px;
+        }
+        #dualViewContainer {
+            min-height: 600px;
+        }
+    </style>
+
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
-    
-    <!-- Cornerstone for DICOM viewing -->
+
+    <!-- Cornerstone Dependencies (ORDER MATTERS) -->
+    <script src="https://unpkg.com/hammerjs@2.0.8/hammer.js"></script>
+    <script src="https://unpkg.com/cornerstone-math@0.1.10/dist/cornerstoneMath.min.js"></script>
     <script src="https://unpkg.com/cornerstone-core@2.6.1/dist/cornerstone.min.js"></script>
-    <script src="https://unpkg.com/cornerstone-wado-image-loader@4.1.3/dist/cornerstoneWADOImageLoader.bundle.min.js"></script>
     <script src="https://unpkg.com/dicom-parser@1.8.13/dist/dicomParser.min.js"></script>
+    
+    <!-- WADO Image Loader with Codecs -->
+    <script src="https://unpkg.com/cornerstone-wado-image-loader@4.1.3/dist/cornerstoneWADOImageLoader.bundle.min.js"></script>
 </head>
 <body>
-    <!-- Header -->
     <header class="header">
         <div class="header-content">
             <h1>LSTV Annotation Tool - Dual View</h1>
@@ -31,14 +48,8 @@
         </div>
     </header>
 
-    <!-- Main Content -->
     <main class="main-content">
-        <!-- Progress Dashboard -->
         <section class="dashboard">
-            <div class="stat-card">
-                <div class="stat-value" id="yourReviews">0</div>
-                <div class="stat-label">Your Reviews</div>
-            </div>
             <div class="stat-card">
                 <div class="stat-value" id="completedStudies">0</div>
                 <div class="stat-label">Completed</div>
@@ -53,157 +64,99 @@
             </div>
         </section>
 
-        <!-- Current Study Info -->
         <section class="study-info">
             <div class="study-header">
                 <h2>Current Study</h2>
                 <div class="study-details">
                     <span class="study-id">Study ID: <strong id="currentStudyId">-</strong></span>
                     <span class="series-info">
-                        Axial: <strong><span id="axialSlice">0</span> / <span id="axialTotal">0</span></strong> | 
+                        Axial: <strong><span id="axialSlice">0</span> / <span id="axialTotal">0</span></strong> |
                         Sagittal: <strong><span id="sagittalSlice">0</span> / <span id="sagittalTotal">0</span></strong>
                     </span>
                 </div>
             </div>
         </section>
 
-        <!-- DICOM Viewer and Annotation Form -->
         <div class="viewer-container-dual">
-            <!-- Dual DICOM Viewers -->
             <div class="viewer-section-dual">
                 <div id="loadingMessage" class="loading-message">
                     <div class="loader"></div>
-                    <p>Loading study from Firebase Storage...</p>
+                    <p id="loadingStatus">Loading study from Firebase Storage...</p>
                 </div>
-                
-                <!-- Dual View Container -->
+
                 <div id="dualViewContainer" class="dual-view-container" style="display:none;">
                     <div class="view-panel">
-                        <div class="view-label">Axial (↑↓ to scroll)</div>
+                        <div class="view-label">Axial (↑↓ Scroll)</div>
                         <div id="axialViewer" class="dicom-viewer"></div>
                     </div>
                     <div class="view-panel">
-                        <div class="view-label">Sagittal (←→ to scroll)</div>
+                        <div class="view-label">Sagittal (←→ Scroll)</div>
                         <div id="sagittalViewer" class="dicom-viewer"></div>
                     </div>
                 </div>
-                
+
                 <div class="viewer-controls">
                     <button id="resetWindowing" class="btn btn-secondary btn-sm">Reset Window/Level</button>
-                    <div class="control-hint">💡 Drag on images to adjust window/level | Green line shows slice position</div>
+                    <div class="control-hint">💡 Drag to adjust W/L | Wheel to scroll | Green lines show slice intersection</div>
                 </div>
             </div>
 
-            <!-- Annotation Form -->
             <div class="annotation-section">
                 <form id="annotationForm" class="annotation-form">
                     <h3>Castellvi Classification</h3>
-                    
+
                     <div class="form-group">
                         <label class="form-label">Type *</label>
                         <div class="radio-group">
-                            <label class="radio-label">
-                                <input type="radio" name="castellvi_type" value="Type 1A" required>
-                                <span>Type 1A - Unilateral dysplastic transverse process (≥19mm)</span>
-                            </label>
-                            <label class="radio-label">
-                                <input type="radio" name="castellvi_type" value="Type 1B" required>
-                                <span>Type 1B - Bilateral dysplastic transverse processes</span>
-                            </label>
-                            <label class="radio-label">
-                                <input type="radio" name="castellvi_type" value="Type 2A" required>
-                                <span>Type 2A - Unilateral incomplete sacralization</span>
-                            </label>
-                            <label class="radio-label">
-                                <input type="radio" name="castellvi_type" value="Type 2B" required>
-                                <span>Type 2B - Bilateral incomplete sacralization</span>
-                            </label>
-                            <label class="radio-label">
-                                <input type="radio" name="castellvi_type" value="Type 3A" required>
-                                <span>Type 3A - Unilateral complete sacralization</span>
-                            </label>
-                            <label class="radio-label">
-                                <input type="radio" name="castellvi_type" value="Type 3B" required>
-                                <span>Type 3B - Bilateral complete sacralization</span>
-                            </label>
-                            <label class="radio-label">
-                                <input type="radio" name="castellvi_type" value="Type 4" required>
-                                <span>Type 4 - Unilateral Type 2, contralateral Type 3</span>
-                            </label>
-                            <label class="radio-label">
-                                <input type="radio" name="castellvi_type" value="Normal" required>
-                                <span>Normal - No transitional anatomy</span>
-                            </label>
+                            <label class="radio-label"><input type="radio" name="castellvi_type" value="Type 1A" required><span>Type 1A - Unilateral dysplastic TP (≥19mm)</span></label>
+                            <label class="radio-label"><input type="radio" name="castellvi_type" value="Type 1B" required><span>Type 1B - Bilateral dysplastic TPs</span></label>
+                            <label class="radio-label"><input type="radio" name="castellvi_type" value="Type 2A" required><span>Type 2A - Unilateral incomplete sacralization</span></label>
+                            <label class="radio-label"><input type="radio" name="castellvi_type" value="Type 2B" required><span>Type 2B - Bilateral incomplete sacralization</span></label>
+                            <label class="radio-label"><input type="radio" name="castellvi_type" value="Type 3A" required><span>Type 3A - Unilateral complete sacralization</span></label>
+                            <label class="radio-label"><input type="radio" name="castellvi_type" value="Type 3B" required><span>Type 3B - Bilateral complete sacralization</span></label>
+                            <label class="radio-label"><input type="radio" name="castellvi_type" value="Type 4" required><span>Type 4 - Type 2 + Type 3 contralateral</span></label>
+                            <label class="radio-label"><input type="radio" name="castellvi_type" value="Normal" required><span>Normal - No transitional anatomy</span></label>
                         </div>
                     </div>
 
                     <div class="form-group">
                         <label class="form-label">Confidence *</label>
                         <div class="radio-group-inline">
-                            <label class="radio-label-inline">
-                                <input type="radio" name="confidence" value="Low" required>
-                                <span>Low</span>
-                            </label>
-                            <label class="radio-label-inline">
-                                <input type="radio" name="confidence" value="Medium" required>
-                                <span>Medium</span>
-                            </label>
-                            <label class="radio-label-inline">
-                                <input type="radio" name="confidence" value="High" required>
-                                <span>High</span>
-                            </label>
+                            <label class="radio-label-inline"><input type="radio" name="confidence" value="Low" required><span>Low</span></label>
+                            <label class="radio-label-inline"><input type="radio" name="confidence" value="Medium" required><span>Medium</span></label>
+                            <label class="radio-label-inline"><input type="radio" name="confidence" value="High" required><span>High</span></label>
                         </div>
                     </div>
 
                     <div class="form-group">
                         <label class="form-label" for="notes">Notes (Optional)</label>
-                        <textarea 
-                            id="notes" 
-                            name="notes" 
-                            rows="4" 
-                            placeholder="Add any observations, concerns, or clarifications..."
-                            class="form-textarea"
-                        ></textarea>
+                        <textarea id="notes" name="notes" rows="3" placeholder="Additional observations..." class="form-textarea"></textarea>
                     </div>
 
                     <div class="form-actions">
-                        <button type="button" id="skipStudy" class="btn btn-secondary">Skip Study</button>
+                        <button type="button" id="skipStudy" class="btn btn-secondary">Skip</button>
                         <button type="submit" id="submitAnnotation" class="btn btn-primary">Submit Annotation</button>
                     </div>
                 </form>
 
-                <!-- Instructions Panel -->
                 <div class="instructions-panel">
-                    <h4>Controls</h4>
+                    <h4>Keyboard Shortcuts</h4>
                     <ul>
-                        <li><strong>Arrow Up/Down:</strong> Scroll axial slices</li>
-                        <li><strong>Arrow Left/Right:</strong> Scroll sagittal slices</li>
-                        <li><strong>Mouse Wheel:</strong> Scroll on each view</li>
-                        <li><strong>Click + Drag:</strong> Adjust window/level</li>
-                        <li><strong>Green Line:</strong> Shows current slice position</li>
+                        <li><strong>Axial:</strong> Up/Down Arrows</li>
+                        <li><strong>Sagittal:</strong> Left/Right Arrows</li>
+                        <li><strong>Reset:</strong> R key</li>
                     </ul>
                 </div>
             </div>
         </div>
     </main>
 
-    <!-- 
-    ⚠️ CRITICAL: Scripts must load in this EXACT order!
-    1. Firebase Config (initializes firebase)
-    2. Application modules (auth, storage, viewer, annotations)
-    3. Main app (uses the modules)
-    -->
-    
-    <!-- 1. Firebase Config - MUST BE FIRST -->
+    <!-- Application Scripts (ORDER MATTERS) -->
     <script src="static/js/config.js"></script>
-    
-    <!-- 2. Application Modules - Can load in any order after config -->
     <script src="static/js/auth.js"></script>
     <script src="static/js/storage.js"></script>
     <script src="static/js/viewer_dual.js"></script>
     <script src="static/js/annotations.js"></script>
-    
-    <!-- 3. Main App - MUST BE LAST (depends on all modules) -->
     <script src="static/js/app_dual.js"></script>
 </body>
 </html>
